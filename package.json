@@ -1,0 +1,50 @@
+{
+  "name": "er-gym",
+  "version": "0.1.0",
+  "description": "A deterministic emergency-department simulation gym for benchmarking AI scheduling and orchestration policies. Exposed over MCP.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js",
+    "./mcp": "./dist/mcp/server.js"
+  },
+  "bin": {
+    "er-gym-mcp": "./dist/mcp/server.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "tsx --test tests/*.test.ts",
+    "mcp": "tsx src/mcp/server.ts",
+    "demo": "tsx examples/random-policy.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.25.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  },
+  "engines": {
+    "node": ">=18.18"
+  },
+  "keywords": [
+    "benchmark",
+    "gym",
+    "simulation",
+    "emergency-department",
+    "scheduling",
+    "mcp",
+    "discrete-event"
+  ]
+}
