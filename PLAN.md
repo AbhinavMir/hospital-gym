@@ -27,7 +27,7 @@ interfaces without rewriting the ED.
    at once. S is not observable — only noisy proxies.
 6. **Attention is finite.** Interrupts occupy role-servers. Claimed ≠ true priority.
 
-## Status: Module 1 COMPLETE. Builds, 20/20 tests pass, MCP verified over stdio.
+## Status: Module 1 COMPLETE. Builds, 26/26 tests pass, MCP verified over stdio.
 
 Calibration sanity (seed-dependent, `ed-baseline`):
 - null policy (no actions at all): 19 deaths / 133 arrivals. Deaths concentrate correctly —
@@ -67,7 +67,7 @@ Calibration sanity (seed-dependent, `ed-baseline`):
 - `src/gym/` — env, actions + mask, observation (latent-leak tested), reward, metrics
 - `src/scenarios/` — 5 scenarios + `degraded()` variant generator
 - `src/mcp/server.ts` — 7 tools, verified over stdio
-- `tests/` — determinism (6) + exploit guards (14). All pass.
+- `tests/` — determinism (6) + exploit guards (14) + IT downtime (6). 26 total, all pass.
 - README with the v1 boarding limitation stated up front, and the caveat carried in `metrics()`
 
 ### Known gaps / next
@@ -91,9 +91,11 @@ Boarding is observable and costly but only PARTIALLY actionable in Module 1. The
 compress ED-side contributors (request early, right level, sequence boarders, work the
 report handoff, keep boarders from deteriorating, transfer out / divert). It cannot fix
 inpatient discharge timing — that is Module 2. So v1 metrics measure boarding *management*,
-not boarding *elimination*. The clairvoyant upper bound is computed against the same
-exogenous release process, so the ceiling is honest. When Module 2 lands the ceiling rises
-and the same policy is re-benchmarked; that delta measures what the hospital module buys.
+not boarding *elimination*. INTENDED: a clairvoyant upper bound computed against the same
+exogenous release process, so the ceiling is honest; when Module 2 lands the ceiling rises and
+the same policy is re-benchmarked, and that delta measures what the hospital module buys.
+NOT YET IMPLEMENTED — README says so explicitly. Until it exists, compare policies to each
+other and to the reference policy, never to an absolute ceiling.
 
 ## Exploit guards (must not regress)
 
