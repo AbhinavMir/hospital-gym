@@ -38,6 +38,11 @@ export const PAGE = String.raw`<!doctype html>
   table{width:100%;border-collapse:collapse}
   th{text-align:left;color:var(--dim);font-weight:500;padding:2px 6px 4px;position:sticky;top:0;background:var(--panel)}
   td{padding:2px 6px;border-top:1px solid #1f2630;white-space:nowrap}
+  /* Key/value tables: fix the layout so a long value can never shove the
+     right-hand column out of the panel. Values wrap instead of overflowing. */
+  .kvt{table-layout:fixed}
+  .kvt td:first-child{width:42%}
+  .kvt td:last-child{text-align:right;white-space:normal;word-break:break-word}
   .beds{display:flex;flex-wrap:wrap;gap:4px}
   .bed{width:52px;height:34px;border-radius:4px;border:1px solid var(--line);
        display:flex;flex-direction:column;align-items:center;justify-content:center;
@@ -107,12 +112,12 @@ export const PAGE = String.raw`<!doctype html>
 
   <div class="panel">
     <h2>Role attention load</h2>
-    <div class="body"><table id="roles"></table></div>
+    <div class="body"><table class="kvt" id="roles"></table></div>
   </div>
 
   <div class="panel">
     <h2>Downstream capacity <span class="dim">noisy · stale</span></h2>
-    <div class="body"><table id="down"></table></div>
+    <div class="body"><table class="kvt" id="down"></table></div>
   </div>
 
   <div class="panel">
@@ -122,12 +127,12 @@ export const PAGE = String.raw`<!doctype html>
 
   <div class="panel">
     <h2>Queues</h2>
-    <div class="body"><table id="queues"></table></div>
+    <div class="body"><table class="kvt" id="queues"></table></div>
   </div>
 
   <div class="panel">
     <h2>Supply <span class="dim">noisy · stale</span></h2>
-    <div class="body"><table id="supply"></table></div>
+    <div class="body"><table class="kvt" id="supply"></table></div>
   </div>
 
   <div class="panel">
@@ -142,7 +147,7 @@ export const PAGE = String.raw`<!doctype html>
 
   <div class="panel">
     <h2>Reward components</h2>
-    <div class="body"><table id="comp"></table></div>
+    <div class="body"><table class="kvt" id="comp"></table></div>
   </div>
 </div>
 
@@ -251,7 +256,7 @@ function render(f){
     ['open criticals', (q.openCriticals.length?'<span class="bad">':'<span>')+q.openCriticals.length+'</span>'],
     ['open controlled', q.openControlled.length],
     ['beds dirty', q.cleaning.length],
-    ['imaging', q.imaging.map(m=>m.modality+':'+m.depth).join(' ')||'—'],
+    ['imaging', q.imaging.map(m=>({'plain-film':'xr'}[m.modality]||m.modality)+':'+m.depth).join(' ')||'—'],
   ]);
 
   rows($('supply'), o.supply.length
