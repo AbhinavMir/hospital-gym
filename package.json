@@ -23,7 +23,8 @@
     "test": "tsx --test tests/*.test.ts",
     "mcp": "tsx src/mcp/server.ts",
     "demo": "tsx examples/random-policy.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "watch": "tsx examples/random-policy.ts ed-baseline demo-seed --watch"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",

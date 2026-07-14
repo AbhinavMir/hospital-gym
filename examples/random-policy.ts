@@ -12,11 +12,29 @@ import { ErEnv } from '../src/gym/env.js';
 import { getScenario } from '../src/scenarios/index.js';
 import type { Action } from '../src/gym/actions.js';
 import { inDangerZone } from '../src/domain/physiology.js';
+import { NULL_VIZ, frameOf, startViz } from '../src/viz/hub.js';
 
-const scenarioName = process.argv[2] ?? 'ed-baseline';
-const seed = process.argv[3] ?? 'demo-seed';
+const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
+const scenarioName = args[0] ?? 'ed-baseline';
+const seed = args[1] ?? 'demo-seed';
+
+// --watch paces the episode so a human can actually follow it. Without it the
+// whole shift runs in under a second, which is right for benchmarking and
+// useless for watching.
+const watch = flags.has('--watch');
+const paceMs = Number([...flags].find((f) => f.startsWith('--pace='))?.split('=')[1] ?? 120);
 
 const env = new ErEnv(getScenario(scenarioName), seed);
+const viz = watch ? startViz(Number(process.env.ER_GYM_VIZ_PORT ?? 7777)) : NULL_VIZ;
+if (watch) {
+  viz.publish(env);
+  console.log(`live board: ${viz.url}  (scenario=${scenarioName} seed=${seed})`);
+  console.log('waiting 2s for you to open it…');
+  await new Promise((r) => setTimeout(r, 2000));
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 let done = false;
 let steps = 0;
@@ -102,6 +120,9 @@ while (!done) {
   obs = res.observation;
   done = res.done;
   steps++;
+
+  viz.broadcast(frameOf(env, steps, res));
+  if (watch) await sleep(paceMs);
 }
 
 const m = env.metrics();

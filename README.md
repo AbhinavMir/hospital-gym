@@ -13,7 +13,24 @@ npm install
 npm test
 npm run demo                      # reference policy on ed-baseline
 npm run demo -- boarding-crisis   # the signature scenario
+npm run watch                     # same, with the live board at :7777
 ```
+
+## Live board
+
+A dashboard so you can watch a policy work instead of reading a metrics dump afterwards.
+Zero dependencies: `node:http` + server-sent events + one static page. No framework, no build step.
+
+```bash
+npm run watch                                        # paced so a human can follow
+npx tsx examples/random-policy.ts boarding-crisis s1 --watch --pace=300
+```
+
+Open <http://127.0.0.1:7777>. It shows the bed grid, the patient board (sickest first, with vitals age so you can see what's gone unmeasured), pending interrupts by claimed priority, role attention load, downstream capacity with staleness, open report handoffs, queues, the agent's last actions with refusal reasons, safety floors as they fire, and the live reward breakdown.
+
+**It is on by default when driving over MCP** — `er_reset` returns the URL, and every `er_step` pushes a frame, so you watch the agent work in real time. Turn it off with `ER_GYM_VIZ=0`, move it with `ER_GYM_VIZ_PORT`.
+
+The board renders the *observation*, not the world — it shows exactly what the agent can see and no more. A test enforces this: if latent state ever leaked into a frame, the dashboard is exactly where it would go unnoticed.
 
 ## Use as a library
 

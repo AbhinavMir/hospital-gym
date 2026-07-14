@@ -10,6 +10,7 @@ import { getScenario, listScenarios } from '../scenarios/index.js';
 import { LAB_TESTS } from '../modules/labs.js';
 import { IMAGING_STUDIES } from '../modules/imaging.js';
 import { DRUGS } from '../modules/pharmacy.js';
+import { NULL_VIZ, frameOf, startViz, type Viz } from '../viz/hub.js';
 
 /**
  * MCP server.
@@ -23,6 +24,29 @@ import { DRUGS } from '../modules/pharmacy.js';
  */
 
 let env: ErEnv | null = null;
+let stepNo = 0;
+
+/**
+ * The live dashboard. On by default so that driving this over MCP is watchable
+ * without any setup; ER_GYM_VIZ=0 turns it off, ER_GYM_VIZ_PORT moves it.
+ *
+ * It must never be able to take the server down: MCP talks stdio, and a dead
+ * HTTP port is not a reason to stop serving tools. Hence the try/catch and the
+ * NULL_VIZ fallback rather than a branch at every call site.
+ */
+const viz: Viz = (() => {
+  if (process.env.ER_GYM_VIZ === '0') return NULL_VIZ;
+  try {
+    const v = startViz(Number(process.env.ER_GYM_VIZ_PORT ?? 7777));
+    // stderr, not stdout: stdout is the MCP transport and any stray byte on it
+    // corrupts the protocol stream.
+    console.error(`[er-gym] live board: ${v.url}`);
+    return v;
+  } catch (e) {
+    console.error(`[er-gym] viz disabled: ${(e as Error).message}`);
+    return NULL_VIZ;
+  }
+})();
 
 const server = new Server(
   { name: 'er-gym', version: '0.1.0' },
@@ -134,7 +158,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
           .parse(args ?? {});
         const spec = getScenario(a.scenario);
         env = new ErEnv(spec, a.seed);
+        stepNo = 0;
+        viz.publish(env);
         return json({
+          liveBoard: viz.url || undefined,
           briefing: {
             scenario: spec.name,
             description: spec.description,
@@ -164,6 +191,7 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const a = z.object({ actions: z.array(z.unknown()).default([]) }).parse(args ?? {});
         const e = requireEnv();
         const res = e.step(a.actions);
+        viz.broadcast(frameOf(e, ++stepNo, res));
         return json({
           reward: round2(res.reward),
           cumulative: res.components,

@@ -27,7 +27,8 @@ interfaces without rewriting the ED.
    at once. S is not observable — only noisy proxies.
 6. **Attention is finite.** Interrupts occupy role-servers. Claimed ≠ true priority.
 
-## Status: Module 1 COMPLETE. Builds, 26/26 tests pass, MCP verified over stdio.
+## Status: Module 1 COMPLETE + live dashboard. Builds, 32/32 tests pass, MCP verified over stdio.
+Pushed: github.com/AbhinavMir/hospital-gym (public, main).
 
 Calibration sanity (seed-dependent, `ed-baseline`):
 - null policy (no actions at all): 19 deaths / 133 arrivals. Deaths concentrate correctly —
@@ -67,7 +68,11 @@ Calibration sanity (seed-dependent, `ed-baseline`):
 - `src/gym/` — env, actions + mask, observation (latent-leak tested), reward, metrics
 - `src/scenarios/` — 5 scenarios + `degraded()` variant generator
 - `src/mcp/server.ts` — 7 tools, verified over stdio
-- `tests/` — determinism (6) + exploit guards (14) + IT downtime (6). 26 total, all pass.
+- `src/viz/` — live board. node:http + SSE + one embedded page, zero deps. On by default
+  under MCP (er_reset returns URL, er_step pushes a frame); ER_GYM_VIZ=0 disables.
+  Notice goes to STDERR — stdout is the MCP transport and any stray byte corrupts it.
+  Renders the observation only, never world state; a test enforces that.
+- `tests/` — determinism (6) + exploit guards (14) + IT downtime (6) + viz (6). 32 total, all pass.
 - README with the v1 boarding limitation stated up front, and the caveat carried in `metrics()`
 
 ### Known gaps / next
