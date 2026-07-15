@@ -27,7 +27,7 @@ interfaces without rewriting the ED.
    at once. S is not observable — only noisy proxies.
 6. **Attention is finite.** Interrupts occupy role-servers. Claimed ≠ true priority.
 
-## Status: Module 1 + dashboard + logging. Builds, 41/41 tests pass, MCP verified over stdio.
+## Status: Module 1 + dashboard + logging + behavioural/LE pathways. 55/55 tests pass.
 Pushed: github.com/AbhinavMir/hospital-gym (public, main).
 
 Calibration sanity (seed-dependent, `ed-baseline`):
@@ -97,6 +97,20 @@ Calibration sanity (seed-dependent, `ed-baseline`):
 - Structured logging: `src/kernel/log.ts`, JSONL + run summary. `npm run logs`.
   Tested that logging never consumes RNG (logged and unlogged runs are identical).
 
+### Iteration 3 (loop) — extended toward a complete ER
+- **Psychiatric holds.** psych-bed was registered but unreachable. Now: `request_psych_bed`,
+  departure path, and re-search on decline. A hold CANNOT be discharged — without that guard
+  discharging the psych board is the cheapest exploit in the module, and the reference policy
+  was doing exactly it (psych boarding read 1.16h; now 5.92h mean / 10.25h max = the real tail).
+  A hold who walks out ELOPES: mandatory non-deferrable legal notification, not a quiet LWBS.
+  A hold in a hallway bed with no sitter is a floor.
+- **Restraints.** 15-min check clock, funded with a nurse, until release. Each missed interval
+  is its OWN floor — deliberately not deduped (2h unchecked != one missed check). Clock is in
+  the observation: a floor you cannot see coming is a trap, not a test. Unchecked restraints
+  raise the hazard.
+- **Law enforcement.** `police_blood_draw` refused + floored without warrant/consent.
+- 3 new floors priced with the identity tier; new `metrics().behavioural` block.
+
 ### Known gaps / next
 - `metrics().supply.byProcess` is a stub `{}` — needs per-process request/fill/no-show/decline
   counters threaded out of `StochasticSupply`. Same for `fallbackLadderDepthMean`,
@@ -105,7 +119,14 @@ Calibration sanity (seed-dependent, `ed-baseline`):
 - No clairvoyant upper bound implemented yet. README claim SOFTENED to say so explicitly.
   Build it next: replay the same seed's release process with a perfect-information policy.
 - Parameters are plausible, not fitted. Stated honestly in the README's Status section.
-- `EmsAgency.maybeUpgrade` (BLS→ALS en route) is written but never called from env.
+- Dead code still unwired: `EmsAgency.maybeUpgrade` (BLS→ALS en route), `directCall`,
+  `wrongAddressProbability`, `TransportBroker` (registry builds it, env never uses it),
+  `blood-products` supply (BloodBank is a separate class), `stopMtp`/`isMtpActive`,
+  `acknowledgePreAlert`. Either wire or delete — leaving them is a lie about coverage.
+- No AMA action (`Disposition` has the `ama` kind but nothing produces it).
+- No re-triage: danger-zone check only fires at initial triage. A patient who decompensates
+  in the waiting room is never re-triaged, so the under-triage floor cannot catch it.
+- Viz does not show restraints/psych holds.
 - ~~IT downtime does not actually degrade the read surface~~ FIXED. Full outage freezes the
   order board + empties capacity feeds; partial inflates staleness; silent outages never set
   `itDowntime`. Freeze is event-driven at the window boundary (NOT lazy on first observe —

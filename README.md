@@ -16,6 +16,17 @@ npm run demo -- boarding-crisis   # the signature scenario
 npm run watch                     # same, with the live board at :7777
 ```
 
+## Logging
+
+Every consequential event is logged as JSONL — the audit trail for a run.
+
+```bash
+npm run logs                                              # writes logs/<run>.jsonl + .summary.json
+npx tsx examples/random-policy.ts boarding-crisis s1 --log --debug --verbose
+```
+
+Determinism extends to the log: the same `(scenario, seed, actions)` reproduces it. Enabling logging never consumes RNG, so a logged run and an unlogged run are the *same episode* — there's a test for that. Grep a patient id out of the JSONL and you get their whole story, arrival to departure, including every action the agent took and every refusal reason.
+
 ## Live board
 
 A dashboard so you can watch a policy work instead of reading a metrics dump afterwards.
@@ -102,6 +113,8 @@ These are load-bearing. Breaking one makes the benchmark measure something other
 | Labs | Collection queue → POCT vs central → transport → accession → analyse → verify, rejection/redraw loop, critical-value callback clock, blood bank ladder + MTP |
 | Imaging | Modality servers, protocolling, contrast/renal gate, transport-to-scanner, **read queue separate from acquisition** |
 | Pharmacy | Verification queue (agent re-ranks, **never verifies**), cabinet/central/compounding, override list, high-alert two-person check, controlled-substance discrepancies |
+| Behavioural | Psychiatric holds (cannot be discharged; need a psych bed — the longest tail), restraints with a 15-min check clock, sitters, elopement as a reportable event |
+| Law enforcement | Blood draw gated on warrant or consent; custody, holds, violent patients as interrupts |
 | Externalities | Three primitives: `SupplyProcess` (solicited), `InterruptChannel` (unsolicited), `AmbientState` (global modifiers) |
 | Report handoff | A **rendezvous**, not a queue: two specific role-instances free simultaneously, shift-change refusal spike, escalation to house supervisor |
 
@@ -124,6 +137,9 @@ Every one is a test in `tests/guards.test.ts`. If one regresses, the score stops
 | Answer all interrupts | Attention is finite; throughput collapses |
 | Trust the capacity peek | Mandatory noise and staleness everywhere |
 | Retry a blocked unsafe action forever | Floors dedupe per (patient, kind) — one mistake counts once |
+| Discharge the psych board | A psychiatric hold is a legal status; discharge is refused outright |
+| Restrain and forget | A 15-min check clock; **every** missed interval is its own floor (not deduped) |
+| Do the officer a favour | Blood draw without warrant or consent is refused and floored |
 
 ## Scenarios
 
