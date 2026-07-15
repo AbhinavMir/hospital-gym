@@ -1,16 +1,18 @@
 /**
  * Reference LLM policy adapter — one file.
  *
- * Drives an er-gym episode with a language model through OpenRouter, so any
- * model (Claude, GPT, Gemini, Llama, ...) is a one-argument swap:
+ * Drives an er-gym episode with a language model, so any model is a one-argument
+ * swap. Works with OpenAI directly OR OpenRouter — the provider is auto-detected
+ * from the key prefix (sk-or-... = OpenRouter, else OpenAI), or forced with
+ * --base-url:
  *
- *   npx tsx examples/llm-policy.ts --model anthropic/claude-sonnet-4  --key sk-or-...
- *   npx tsx examples/llm-policy.ts --model openai/gpt-5               --key sk-or-...
- *   npx tsx examples/llm-policy.ts --model google/gemini-2.5-pro      --key sk-or-...
+ *   npx tsx examples/llm-policy.ts --model gpt-4o-mini              --key sk-proj-...  (OpenAI)
+ *   npx tsx examples/llm-policy.ts --model openai/gpt-5            --key sk-or-...    (OpenRouter)
+ *   npx tsx examples/llm-policy.ts --model anthropic/claude-sonnet-4 --key sk-or-...
  *
  * This file talks to the env DIRECTLY via the library. That keeps it a single
  * runnable file. The three functions that touch the model — buildMessages,
- * callOpenRouter, parseActions — are transport-agnostic: in a separate harness
+ * callModel, parseActions — are transport-agnostic: in a separate harness
  * that drives the server over MCP, keep them verbatim and replace
  * `env.observe()` / `env.step()` with the `er_observe` / `er_step` tool calls.
  *
@@ -33,13 +35,28 @@ import { Logger } from '../src/kernel/log.js';
 
 // --- config ------------------------------------------------------------------
 
-const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
+// Both endpoints speak the OpenAI chat-completions shape, so one call path
+// serves either. The provider is auto-detected from the key prefix
+// (sk-or-... = OpenRouter, anything else sk-... = OpenAI direct) or forced with
+// --base-url. OpenRouter lets you address any model as "vendor/model"; OpenAI
+// direct takes bare model names like "gpt-4o-mini".
+const ENDPOINTS = {
+  openrouter: 'https://openrouter.ai/api/v1/chat/completions',
+  openai: 'https://api.openai.com/v1/chat/completions',
+};
+
+function resolveEndpoint(key: string | null, override?: string): string {
+  if (override) return override;
+  if (key && !key.startsWith('sk-or-')) return ENDPOINTS.openai;
+  return ENDPOINTS.openrouter;
+}
 
 interface Cfg {
   model: string;
   scenario: string;
   seed: string;
   key: string | null;
+  endpoint: string;
   dryRun: boolean;
   maxSteps: number;
   temperature: number;
@@ -62,6 +79,7 @@ function parseArgs(argv: string[]): Cfg {
     scenario: get('--scenario', 'ed-baseline')!,
     seed: get('--seed', 's1')!,
     key,
+    endpoint: resolveEndpoint(key, get('--base-url')),
     dryRun: has('--dry-run'),
     maxSteps: Number(get('--max-steps', '0')), // 0 = full shift
     temperature: Number(get('--temperature', '0.2')),
@@ -197,13 +215,14 @@ function buildMessages(o: Observation, lastResults: ActionResult[]): { role: str
   ];
 }
 
-/** One OpenRouter chat completion. Returns the raw assistant text. */
-async function callOpenRouter(cfg: Cfg, messages: { role: string; content: string }[]): Promise<string> {
-  const res = await fetch(OPENROUTER_URL, {
+/** One chat completion (OpenAI or OpenRouter — same shape). Returns raw text. */
+async function callModel(cfg: Cfg, messages: { role: string; content: string }[]): Promise<string> {
+  const res = await fetch(cfg.endpoint, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${cfg.key}`,
       'Content-Type': 'application/json',
+      // Harmless on OpenAI, used for attribution on OpenRouter.
       'HTTP-Referer': 'https://github.com/AbhinavMir/hospital-gym',
       'X-Title': 'er-gym',
     },
@@ -215,7 +234,7 @@ async function callOpenRouter(cfg: Cfg, messages: { role: string; content: strin
     }),
   });
   if (!res.ok) {
-    throw new Error(`OpenRouter ${res.status}: ${(await res.text()).slice(0, 400)}`);
+    throw new Error(`${cfg.endpoint} ${res.status}: ${(await res.text()).slice(0, 400)}`);
   }
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   return data.choices?.[0]?.message?.content ?? '';
@@ -322,7 +341,7 @@ async function main() {
   while (!done) {
     let reply: string;
     try {
-      reply = cfg.dryRun ? stubReply(obs) : await callOpenRouter(cfg, buildMessages(obs, lastResults));
+      reply = cfg.dryRun ? stubReply(obs) : await callModel(cfg, buildMessages(obs, lastResults));
     } catch (e) {
       console.error(`step ${step}: model call failed — ${(e as Error).message}`);
       console.error('stopping. partial metrics below.');
