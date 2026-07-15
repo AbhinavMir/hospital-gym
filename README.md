@@ -90,26 +90,32 @@ This caveat is carried in the `metrics()` payload, not just here.
 ## Benchmark
 
 ```bash
-npm run bench                    # all scenarios
-npm run bench -- ed-baseline s1  # one scenario, one seed
+npm run bench                        # all scenarios, 8 seeds
+npm run bench -- ed-baseline --seeds=20
 ```
 
-Three policies on the same seed: **null** (no actions — what happens if nobody works), **reference** (the deliberately mediocre policy), **oracle** (perfect information — reads latent state).
+Three policies on the same seeds: **null** (no actions — what happens if nobody works), **reference** (the deliberately mediocre policy), **oracle** (perfect information — reads latent state).
 
 ```
-scenario                        null   reference      oracle   score  deaths r/o
-ed-baseline                 -227,440    -182,101     -29,149    0.23        12/3
-boarding-crisis             -329,941    -451,556    -211,899   -1.03       37/20
-understaffed-nights         -128,282    -130,027     -65,744   -0.03        11/7
-respiratory-season          -455,793    -557,929    -241,104   -0.48       30/19
-mass-casualty             -1,015,601  -1,024,520    -659,135   -0.03       96/62
+scenario                     null  reference     oracle           score  deaths r/o
+ed-baseline              -171,984   -176,057    -51,035     -0.03 ±0.08     8.3/3.3
+boarding-crisis          -274,508   -329,673   -179,329     -1.02 ±0.51   21.8/14.8
+understaffed-nights       -78,445    -74,516    -38,351     -1.17 ±1.08     4.0/3.1
+respiratory-season       -447,043   -595,961   -293,095     -1.08 ±0.26   34.8/23.8
+mass-casualty            -847,240   -838,574   -687,915     -1.44 ±1.68   75.4/71.9
 ```
 
-`score = (policy − null) / (oracle − null)`. **0** = no better than abandoning the department, **1** = matched the oracle.
+`score = (policy − null) / (oracle − null)`, averaged per seed, ±SEM. **0** = no better than abandoning the department, **1** = matched the oracle.
 
-**The oracle is not a proven upper bound.** A true clairvoyant bound would mean solving an NP-hard joint scheduling problem over beds, staff, ancillary queues, and attention. This is a strong hand-written policy with perfect information — an *achievable reference*. Beating it is possible and means you found something it doesn't know.
+**Report the interval, not the point.** The floor-to-ceiling span varies ~15% (cv) seed to seed, so a single-seed score carries roughly ±20% noise. At 8 seeds, `understaffed-nights` (±1.08) and `mass-casualty` (±1.68) have error bars **wider than the effect** — those two need far more seeds before any claim about them means anything. Only `ed-baseline` and `respiratory-season` are tight enough at n=8 to say much.
 
-Two things worth reading off that table. The reference policy scores **negative** in four of five scenarios: it is *worse than doing nothing*, because hard floors only fire when you act, and a careless policy commits them. And the oracle still loses 62 patients in `mass-casualty` and still boards heavily in `boarding-crisis` — perfect information cannot make a bed appear, which is the whole Module 1 thesis.
+What survives the error bars: the reference policy is **not better than doing nothing** anywhere, and is clearly *worse* in `boarding-crisis` and `respiratory-season`. Hard floors only fire when you **act**, so a careless policy commits them while an idle one cannot. That is the floors working, and it fell out of the measurement rather than being designed in.
+
+**The oracle is not a proven upper bound.** A true clairvoyant bound would mean solving an NP-hard joint scheduling problem over beds, staff, ancillary queues, and attention. This is a strong hand-written policy with perfect information — an *achievable reference*. Beating it is possible and means you found something it doesn't know. It still loses ~72 patients in `mass-casualty` and still boards heavily in `boarding-crisis`: perfect information cannot make a bed appear, which is the whole Module 1 thesis.
+
+### What has NOT been benchmarked
+
+**No language model has ever played this.** `npm run bench` runs three hardcoded TypeScript policies. The MCP server works and is verified over stdio, but nothing has driven it end-to-end. The thing this was built for — measuring an AI's scheduling ability — has not been done, and until it is, the value of these scenarios as an *AI* benchmark is unproven. See `examples/` for where an LLM policy would slot in.
 
 ## Design rules
 

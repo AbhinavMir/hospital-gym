@@ -27,10 +27,24 @@ import type { Action } from '../src/gym/actions.js';
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
 const scenarios = args[0] ? [args[0]] : Object.keys(SCENARIOS);
-const seed = args[1] ?? 'bench-1';
+/**
+ * Seeds, not seed.
+ *
+ * A single seed is not a measurement. The floor-to-ceiling span on ed-baseline
+ * swings 85k..143k across seeds (cv ~0.15), and the normalised score divides by
+ * that span — so a one-seed score carries roughly +/-20% of noise and any
+ * comparison between two policies on one seed is close to meaningless.
+ *
+ * Scores are averaged per seed (not computed from averaged rewards): each seed
+ * is its own paired null/oracle span, which is the whole point of holding the
+ * seed fixed across policies.
+ */
+const nSeeds = Number([...flags].find((f) => f.startsWith('--seeds='))?.split('=')[1] ?? 8);
+const seedBase = args[1] ?? 's';
+const seeds = Array.from({ length: nSeeds }, (_, i) => `${seedBase}${i + 1}`);
 const withLog = flags.has('--log');
 
-function run(scenario: string, policy: 'null' | 'reference' | 'oracle') {
+function run(scenario: string, policy: 'null' | 'reference' | 'oracle', seed: string) {
   const log = withLog
     ? new Logger({ runId: `bench-${scenario}-${policy}-${seed}`, dir: 'logs', toFile: true })
     : undefined;
@@ -108,42 +122,66 @@ function referenceActions(env: ErEnv): Action[] {
 }
 
 const pad = (s: string | number, n: number) => String(s).padStart(n);
+const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+const sd = (xs: number[]) => {
+  const m = mean(xs);
+  return Math.sqrt(xs.reduce((a, b) => a + (b - m) ** 2, 0) / xs.length);
+};
+/** Standard error of the mean: how much we would trust this if we re-ran it. */
+const sem = (xs: number[]) => sd(xs) / Math.sqrt(xs.length);
 
-console.log(`\ner-gym benchmark · seed=${seed}\n`);
+console.log(`\ner-gym benchmark · ${seeds.length} seeds (${seeds[0]}..${seeds[seeds.length - 1]})\n`);
 console.log(
-  'scenario'.padEnd(24) +
-    pad('null', 12) +
-    pad('reference', 12) +
-    pad('oracle', 12) +
-    pad('score', 8) +
+  'scenario'.padEnd(22) +
+    pad('null', 11) +
+    pad('reference', 11) +
+    pad('oracle', 11) +
+    pad('score', 16) +
     pad('deaths r/o', 12),
 );
-console.log('-'.repeat(80));
+console.log('-'.repeat(84));
 
 for (const s of scenarios) {
-  const n = run(s, 'null');
-  const r = run(s, 'reference');
-  const o = run(s, 'oracle');
+  const nulls: number[] = [];
+  const refs: number[] = [];
+  const oracles: number[] = [];
+  const scores: number[] = [];
+  const refDeaths: number[] = [];
+  const oraDeaths: number[] = [];
 
-  // Normalise between the floor and the ceiling. If the oracle somehow fails to
-  // beat doing nothing, the score is meaningless and we say so rather than
-  // printing a confident number.
-  const span = o.reward - n.reward;
-  const score = span > 0 ? (r.reward - n.reward) / span : NaN;
+  for (const seed of seeds) {
+    const n = run(s, 'null', seed);
+    const r = run(s, 'reference', seed);
+    const o = run(s, 'oracle', seed);
+    nulls.push(n.reward);
+    refs.push(r.reward);
+    oracles.push(o.reward);
+    refDeaths.push(r.metrics.clinical.deaths);
+    oraDeaths.push(o.metrics.clinical.deaths);
+
+    // Score PER SEED against that seed's own paired span. Averaging rewards
+    // first and dividing once would let a single extreme seed dominate.
+    const span = o.reward - n.reward;
+    if (span > 0) scores.push((r.reward - n.reward) / span);
+  }
+
+  const scoreStr = scores.length
+    ? `${mean(scores).toFixed(2)} ±${sem(scores).toFixed(2)}`
+    : 'n/a';
 
   console.log(
-    s.padEnd(24) +
-      pad(Math.round(n.reward).toLocaleString(), 12) +
-      pad(Math.round(r.reward).toLocaleString(), 12) +
-      pad(Math.round(o.reward).toLocaleString(), 12) +
-      pad(Number.isFinite(score) ? score.toFixed(2) : 'n/a', 8) +
-      pad(`${r.metrics.clinical.deaths}/${o.metrics.clinical.deaths}`, 12),
+    s.padEnd(22) +
+      pad(Math.round(mean(nulls)).toLocaleString(), 11) +
+      pad(Math.round(mean(refs)).toLocaleString(), 11) +
+      pad(Math.round(mean(oracles)).toLocaleString(), 11) +
+      pad(scoreStr, 16) +
+      pad(`${mean(refDeaths).toFixed(1)}/${mean(oraDeaths).toFixed(1)}`, 12),
   );
 }
 
+console.log('\nRewards are means over seeds. score = mean per-seed (policy - null) / (oracle - null), ±SEM.');
+console.log('0 = no better than doing nothing, 1 = matched the oracle. Negative = worse than doing nothing.');
 console.log(
-  '\nscore = (reference - null) / (oracle - null).  0 = no better than doing nothing, 1 = matched the oracle.',
+  'The oracle reads latent state. It is a strong policy with perfect information,\nNOT a proven upper bound — beating it means you found something it does not know.',
 );
-console.log(
-  'The oracle reads latent state. It is a strong policy with perfect information,\nNOT a proven upper bound — beating it is possible and means you found something it does not know.',
-);
+console.log(`\nSingle-seed scores are NOT reliable: the floor-to-ceiling span varies ~15% (cv) across seeds.\nUse --seeds=N (default 8) and report the interval, not a point.`);

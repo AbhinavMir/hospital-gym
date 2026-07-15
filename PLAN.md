@@ -28,6 +28,12 @@ interfaces without rewriting the ED.
 6. **Attention is finite.** Interrupts occupy role-servers. Claimed ≠ true priority.
 
 ## Status: Module 1 COMPLETE. 61/61 tests. Oracle ceiling + full ER pathways + logging + board.
+
+### THE BIG ONE: no LLM has ever played this.
+`npm run bench` benchmarks three HARDCODED policies (null/reference/oracle). The MCP server
+works and is stdio-verified, but no model has driven an episode. The entire premise — that this
+measures AI scheduling ability — is UNTESTED. Everything else is scaffolding until that runs.
+Next: an LLM policy adapter (Anthropic API loop or MCP client) + a scored multi-seed run.
 Loop scope from the user ("fix everything end to end, extend to a complete ER, log everything")
 is DONE. Remaining items below are refinements, not gaps.
 Pushed: github.com/AbhinavMir/hospital-gym (public, main).
@@ -137,6 +143,16 @@ Calibration sanity (seed-dependent, `ed-baseline`):
   `wrongAddressProbability`, `stopMtp` (new `stop_mtp` action).
 - Headline finding: the reference policy scores NEGATIVE in 4/5 scenarios — worse than doing
   nothing, because floors only fire when you act. That is the floors working.
+
+### Iteration 5 — benchmark methodology
+- **Single-seed scores were noise.** ed-baseline read 0.23 on seed bench-1; over 8 seeds it is
+  -0.03 ±0.08 — i.e. indistinguishable from doing nothing. The 0.23 was published in the README.
+  Floor-to-ceiling span varies 85k..143k across seeds (cv 0.15) and the score divides by it.
+  bench is now multi-seed (default 8, --seeds=N), scores computed PER SEED against that seed's
+  own paired span, reported with SEM.
+- At n=8, `understaffed-nights` (±1.08) and `mass-casualty` (±1.68) have error bars WIDER than
+  the effect. Do not quote them. They need n>=50, or variance reduction (common random numbers
+  are already in place via the shared seed; consider control variates).
 
 ### Known gaps / next
 - `metrics().supply.byProcess` is a stub `{}` — needs per-process request/fill/no-show/decline
