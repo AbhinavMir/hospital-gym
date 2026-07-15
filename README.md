@@ -73,7 +73,9 @@ console.log(env.metrics());
 }
 ```
 
-Tools: `er_scenarios`, `er_reset`, `er_observe`, `er_step`, `er_action_space`, `er_formulary`, `er_metrics`.
+Tools: `er_scenarios`, `er_reset`, `er_observe`, `er_step`, `er_action_space`, `er_formulary`, `er_metrics`, `er_sessions`.
+
+**Each model gets its own run.** `er_reset` is a handshake: pass your model name and it provisions a fresh episode plus a durable SQLite record at `runs/<model>_<rand>.sqlite`, returning a `sessionId`. Thread that id through `er_observe`/`er_step`/`er_metrics` and concurrent models never corrupt each other. The `.sqlite` holds the whole run — handshake metadata, every step's actions and reward, safety events, and the final scorecard — so a run is auditable and comparable after the fact. (Omit the id for a single serial run; it resolves to the most recent.)
 
 ## The honest limitation, stated up front
 

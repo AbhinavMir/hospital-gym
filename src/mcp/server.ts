@@ -11,20 +11,31 @@ import { LAB_TESTS } from '../modules/labs.js';
 import { IMAGING_STUDIES } from '../modules/imaging.js';
 import { DRUGS } from '../modules/pharmacy.js';
 import { NULL_VIZ, frameOf, startViz, type Viz } from '../viz/hub.js';
+import { SessionStore, type SessionHandle } from './sessions.js';
 
 /**
  * MCP server.
  *
- * Exposes the ER gym as tools so a policy can drive an episode conversationally.
- * One env per session; `er_reset` starts a new episode.
+ * Exposes the ER gym as tools so an external harness can benchmark a model
+ * against it. Each model that connects gets its OWN env and its OWN SQLite run
+ * record (see sessions.ts), so two models benchmarking at once cannot corrupt
+ * each other's shift.
  *
  * The tool descriptions carry the rules the agent needs and no more. They do
  * NOT reveal latent state, the true stress factor, or per-source true
  * priorities — those are what the benchmark measures.
  */
 
-let env: ErEnv | null = null;
-let stepNo = 0;
+// A private seed for session-id suffixes only. Never touches the simulation,
+// which owns its own deterministic RNG per (scenario, seed).
+let idCounter = 0x9e3779b9;
+const idRand = () => {
+  idCounter = (Math.imul(idCounter ^ (idCounter >>> 15), 0x2c1b3c6d) >>> 0) || 1;
+  return (idCounter >>> 0) / 0x100000000;
+};
+
+const store = new SessionStore(process.env.ER_GYM_RUNS_DIR ?? 'runs', idRand);
+process.on('exit', () => store.closeAll());
 
 /**
  * The live dashboard. On by default so that driving this over MCP is watchable
@@ -53,9 +64,18 @@ const server = new Server(
   { capabilities: { tools: {} } },
 );
 
-const requireEnv = (): ErEnv => {
-  if (!env) throw new Error('No episode running. Call er_reset first.');
-  return env;
+/** Resolve the session for a call. `sessionId` is optional for a serial harness
+ *  driving one run at a time; required once more than one run is open. */
+const requireSession = (sessionId?: string): SessionHandle => {
+  const h = store.get(sessionId);
+  if (!h) {
+    throw new Error(
+      sessionId
+        ? `No such session "${sessionId}". Call er_reset to start one.`
+        : 'No episode running. Call er_reset first (pass your model name).',
+    );
+  }
+  return h;
 };
 
 const TOOLS = [
@@ -68,12 +88,19 @@ const TOOLS = [
   {
     name: 'er_reset',
     description:
-      'Start a new episode. Deterministic: the same (scenario, seed, action sequence) always ' +
-      'reproduces the same episode, so scores are comparable across runs and machines. ' +
-      'Returns the first observation, the action mask, and the scenario briefing.',
+      'Handshake + start a run. Pass your model name; the server provisions a fresh episode and a ' +
+      'durable SQLite run record named <model>_<rand>.sqlite, and returns a sessionId. Thread that ' +
+      'sessionId through er_observe / er_step / er_metrics so concurrent runs stay isolated. ' +
+      'Deterministic: the same (scenario, seed, action sequence) reproduces the same episode. ' +
+      'Returns the sessionId, first observation, action mask, and scenario briefing.',
     inputSchema: {
       type: 'object',
       properties: {
+        model: {
+          type: 'string',
+          description: 'Name of the model being benchmarked. Becomes the run-record filename stem.',
+          default: 'model',
+        },
         scenario: { type: 'string', description: 'Scenario name from er_scenarios.', default: 'ed-baseline' },
         seed: {
           type: ['string', 'number'],
@@ -87,10 +114,14 @@ const TOOLS = [
   {
     name: 'er_observe',
     description:
-      'Current observation without advancing time. Free to call. ' +
+      'Current observation without advancing time. Free to call. Pass your sessionId. ' +
       'NOTE: vitals are only present for patients you have measured, and every downstream/supply ' +
       'number carries its own staleness in minutes. Nothing here is ground truth.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    inputSchema: {
+      type: 'object',
+      properties: { sessionId: { type: 'string', description: 'From er_reset. Optional for a single serial run.' } },
+      additionalProperties: false,
+    },
   },
   {
     name: 'er_step',
@@ -103,6 +134,7 @@ const TOOLS = [
     inputSchema: {
       type: 'object',
       properties: {
+        sessionId: { type: 'string', description: 'From er_reset. Optional for a single serial run.' },
         actions: {
           type: 'array',
           description: 'Actions to apply. Use er_action_space for the full schema. Empty = let time pass.',
@@ -118,7 +150,11 @@ const TOOLS = [
     description:
       'The full action schema, the currently-legal action list, and the actions that are GATED OUT ' +
       'because their module is not installed (with the reason). Call this to see what you can do.',
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    inputSchema: {
+      type: 'object',
+      properties: { sessionId: { type: 'string' } },
+      additionalProperties: false,
+    },
   },
   {
     name: 'er_formulary',
@@ -134,6 +170,15 @@ const TOOLS = [
       'Full metric report for the episode so far: clinical, access, boarding (decomposed into ' +
       'bed-request lead time vs report-handoff latency), ancillary stage splits, attention/interrupt ' +
       'triage quality, anticipation, capacity, and safety-floor counts.',
+    inputSchema: {
+      type: 'object',
+      properties: { sessionId: { type: 'string' } },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: 'er_sessions',
+    description: 'List open runs on this server: sessionId, model, scenario, step, and whether finalized.',
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
 ] as const;
@@ -152,15 +197,17 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
       case 'er_reset': {
         const a = z
           .object({
+            model: z.string().default('model'),
             scenario: z.string().default('ed-baseline'),
             seed: z.union([z.string(), z.number()]).default('default-seed'),
           })
           .parse(args ?? {});
         const spec = getScenario(a.scenario);
-        env = new ErEnv(spec, a.seed);
-        stepNo = 0;
-        viz.publish(env);
+        const h = store.open(a.model, spec, a.seed);
+        viz.publish(h.env);
         return json({
+          sessionId: h.id,
+          runRecord: h.dbPath,
           liveBoard: viz.url || undefined,
           briefing: {
             scenario: spec.name,
@@ -179,35 +226,53 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             'A bed assignment does not move a patient. Report handoff must complete first.',
             'Hard safety floors are priced above any achievable throughput gain. Do not trade against them.',
           ],
-          mask: env.mask(),
-          observation: env.observe(),
+          mask: h.env.mask(),
+          observation: h.env.observe(),
         });
       }
 
-      case 'er_observe':
-        return json(requireEnv().observe());
+      case 'er_observe': {
+        const a = z.object({ sessionId: z.string().optional() }).parse(args ?? {});
+        return json(requireSession(a.sessionId).env.observe());
+      }
 
       case 'er_step': {
-        const a = z.object({ actions: z.array(z.unknown()).default([]) }).parse(args ?? {});
-        const e = requireEnv();
-        const res = e.step(a.actions);
-        viz.broadcast(frameOf(e, ++stepNo, res));
+        const a = z
+          .object({ sessionId: z.string().optional(), actions: z.array(z.unknown()).default([]) })
+          .parse(args ?? {});
+        const h = requireSession(a.sessionId);
+        const res = h.env.step(a.actions);
+        // Persist the step to the run record BEFORE returning, so a crashed
+        // client still leaves a complete audit trail up to the last step.
+        store.recordStep(
+          h,
+          a.actions,
+          res.results,
+          res.reward,
+          res.components.total,
+          res.info.time,
+          res.info.clock,
+          res.info.newSafetyEvents,
+        );
+        if (res.done) store.finalize(h);
+        viz.broadcast(frameOf(h.env, h.step, res));
         return json({
+          sessionId: h.id,
           reward: round2(res.reward),
           cumulative: res.components,
           done: res.done,
           results: res.results,
           info: res.info,
           observation: res.observation,
-          ...(res.done ? { metrics: e.metrics() } : {}),
+          ...(res.done ? { metrics: h.env.metrics(), runRecord: h.dbPath } : {}),
         });
       }
 
       case 'er_action_space': {
-        const e = requireEnv();
+        const a = z.object({ sessionId: z.string().optional() }).parse(args ?? {});
         return json({
           schema: zodToJsonSchema(ActionSchema, { $refStrategy: 'none' }),
-          mask: e.mask(),
+          mask: requireSession(a.sessionId).env.mask(),
         });
       }
 
@@ -233,11 +298,21 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             controlled: d.controlled,
             requiresCompounding: d.requiresCompounding,
           })),
-          consultServices: Object.keys(requireEnv().scenario.registry.consultServices),
+          consultServices: Object.keys(
+            requireSession(z.object({ sessionId: z.string().optional() }).parse(args ?? {}).sessionId).env.scenario
+              .registry.consultServices,
+          ),
         });
 
-      case 'er_metrics':
-        return json(requireEnv().metrics());
+      case 'er_metrics': {
+        const a = z.object({ sessionId: z.string().optional() }).parse(args ?? {});
+        const h = requireSession(a.sessionId);
+        store.finalize(h);
+        return json({ sessionId: h.id, runRecord: h.dbPath, ...h.env.metrics() });
+      }
+
+      case 'er_sessions':
+        return json({ sessions: store.list() });
 
       default:
         throw new Error(`unknown tool ${name}`);

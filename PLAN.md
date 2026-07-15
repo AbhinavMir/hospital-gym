@@ -29,6 +29,15 @@ interfaces without rewriting the ED.
 
 ## Status: Module 1 COMPLETE. 61/61 tests. Oracle ceiling + full ER pathways + logging + board.
 
+### Session isolation + durable run records (done)
+- MCP server no longer holds one global env. `er_reset(model, scenario, seed)` is a handshake:
+  provisions a per-model `runs/<model>_<rand>.sqlite` and returns a sessionId threaded through
+  every later call. Two models benchmarking at once are fully isolated.
+- The SQLite is the RUN RECORD (handshake meta, per-step actions+reward, safety rows, final
+  scorecard) — NOT the live sim, which stays in memory. `better-sqlite3` (synchronous, fits the
+  sync step loop). Steps persist before er_step returns, so a crashed client still leaves a
+  complete trail. `er_sessions` lists open runs. 8 tests in tests/sessions.test.ts.
+
 ### THE BIG ONE: no LLM has ever played this.
 `npm run bench` benchmarks three HARDCODED policies (null/reference/oracle). The MCP server
 works and is stdio-verified, but no model has driven an episode. The entire premise — that this
