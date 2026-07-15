@@ -79,6 +79,8 @@ export const PAGE = String.raw`<!doctype html>
   <span class="kv">census <b id="census">0</b></span>
   <span class="kv">waiting <b id="waiting">0</b></span>
   <span class="kv">boarding <b id="boarding">0</b></span>
+  <span class="kv">holds <b id="holds">0</b></span>
+  <span class="kv">restrained <b id="restr">0</b></span>
   <span class="kv">stress~ <b id="stress">—</b></span>
   <span class="kv" id="divwrap" style="display:none">· <b class="bad">DIVERSION</b></span>
   <span class="kv" id="dtwrap" style="display:none">· <b class="bad" id="dt">IT DOWN</b></span>
@@ -96,7 +98,7 @@ export const PAGE = String.raw`<!doctype html>
     <div class="body" style="max-height:340px">
       <table><thead><tr>
         <th>id</th><th>esi</th><th>complaint</th><th>phase</th><th>loc</th>
-        <th>wait</th><th>vitals</th><th>age</th><th>rn</th><th>md</th><th>ord</th><th>dispo</th><th>board</th>
+        <th>wait</th><th>vitals</th><th>age</th><th>rn</th><th>md</th><th>ord</th><th>dispo</th><th>board</th><th>flags</th>
       </tr></thead><tbody id="pts"></tbody></table>
     </div>
   </div>
@@ -160,6 +162,21 @@ function rows(el, pairs){
   el.innerHTML = pairs.map(([k,v]) =>
     '<tr><td class="dim">'+k+'</td><td style="text-align:right">'+v+'</td></tr>').join('');
 }
+// Restraint clocks and psych holds are the two things that quietly go wrong
+// while you are looking at the bed grid, so surface them on the patient row.
+function behFlags(p){
+  const out = [];
+  if (p.psychHold) out.push('<span class="pill e2" title="psychiatric hold">HOLD</span>');
+  if (p.sitter) out.push('<span class="pill e4" title="sitter assigned">SIT</span>');
+  if (p.restraint){
+    const due = p.restraint.minutesUntilCheckDue;
+    const cls = due < 0 ? 'e1' : due <= 5 ? 'e2' : 'e5';
+    const label = due < 0 ? 'CHK '+Math.abs(due)+'m LATE' : 'CHK '+due+'m';
+    out.push('<span class="pill '+cls+'" title="restraint check clock">'+label+'</span>');
+    if (p.restraint.checksMissed) out.push('<span class="bad" title="missed checks">x'+p.restraint.checksMissed+'</span>');
+  }
+  return out.join(' ');
+}
 function bar(v, max, hot){
   const p = max ? Math.min(100, Math.round(100*v/max)) : 0;
   return '<div class="bar'+(hot?' hot':'')+'"><i style="width:'+p+'%"></i></div>';
@@ -184,6 +201,12 @@ function render(f){
   $('census').textContent = pts.length;
   $('waiting').textContent = pts.filter(p=>p.phase.startsWith('waiting')).length;
   $('boarding').textContent = pts.filter(p=>p.phase==='boarding').length;
+  $('holds').textContent = pts.filter(p=>p.psychHold).length;
+  const restrained = pts.filter(p=>p.restraint);
+  $('restr').textContent = restrained.length;
+  // An overdue restraint check is a hard floor accruing right now — make it shout.
+  const overdue = restrained.filter(p=>p.restraint.minutesUntilCheckDue < 0).length;
+  $('restr').className = overdue ? 'bad' : '';
 
   // beds
   const beds = o.ed.beds;
@@ -215,7 +238,8 @@ function render(f){
         + '<td class="dim">'+t(p.assignedProvider,'—').replace('md-','').replace('app-','a')+'</td>'
         + '<td class="dim">'+p.orders.length+'</td>'
         + '<td>'+t(p.disposition,'')+'</td>'
-        + '<td class="'+(p.boardingMinutes>240?'bad':'warn')+'">'+(p.boardingMinutes!==null?p.boardingMinutes+'m':'')+'</td></tr>';
+        + '<td class="'+(p.boardingMinutes>240?'bad':'warn')+'">'+(p.boardingMinutes!==null?p.boardingMinutes+'m':'')+'</td>'
+        + '<td>'+behFlags(p)+'</td></tr>';
     }).join('') || '<tr><td colspan="13" class="dim">empty department</td></tr>';
 
   // interrupts

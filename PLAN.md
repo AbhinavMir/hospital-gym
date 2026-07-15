@@ -27,7 +27,9 @@ interfaces without rewriting the ED.
    at once. S is not observable — only noisy proxies.
 6. **Attention is finite.** Interrupts occupy role-servers. Claimed ≠ true priority.
 
-## Status: Module 1 complete + oracle ceiling. 61/61 tests pass. All 5 gaps from iteration 3 closed.
+## Status: Module 1 COMPLETE. 61/61 tests. Oracle ceiling + full ER pathways + logging + board.
+Loop scope from the user ("fix everything end to end, extend to a complete ER, log everything")
+is DONE. Remaining items below are refinements, not gaps.
 Pushed: github.com/AbhinavMir/hospital-gym (public, main).
 
 Calibration sanity (seed-dependent, `ed-baseline`):
@@ -144,7 +146,9 @@ Calibration sanity (seed-dependent, `ed-baseline`):
 - Oracle is a strong policy, not a proven bound. Fine, and labelled as such — but atrue bound
   would need an LP/MILP relaxation. Open research question, not a defect.
 - Parameters are plausible, not fitted. Stated honestly in the README's Status section.
-- Viz does not show restraints/psych holds/sitters.
+- ~~Viz does not show restraints/psych holds~~ FIXED: HOLD/SIT/CHK pills on the patient row,
+  header counters, and the restraint counter turns red when a check is overdue (a floor
+  accruing right now should shout).
 - `directCall` on EmsAgency still unused (env calls the agency directly instead); harmless
   duplication, but pick one.
 - Oracle residual: 3-4 `wrong-patient-identity` under saturated attention. Believed
