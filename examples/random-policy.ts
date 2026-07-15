@@ -13,6 +13,7 @@ import { getScenario } from '../src/scenarios/index.js';
 import type { Action } from '../src/gym/actions.js';
 import { inDangerZone } from '../src/domain/physiology.js';
 import { NULL_VIZ, frameOf, startViz } from '../src/viz/hub.js';
+import { Logger } from '../src/kernel/log.js';
 
 const args = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const flags = new Set(process.argv.slice(2).filter((a) => a.startsWith('--')));
@@ -25,7 +26,18 @@ const seed = args[1] ?? 'demo-seed';
 const watch = flags.has('--watch');
 const paceMs = Number([...flags].find((f) => f.startsWith('--pace='))?.split('=')[1] ?? 120);
 
-const env = new ErEnv(getScenario(scenarioName), seed);
+// --log writes a JSONL event log + run summary under logs/.
+const logging = flags.has('--log')
+  ? new Logger({
+      runId: `${scenarioName}-${seed}-${process.pid}`,
+      dir: 'logs',
+      toFile: true,
+      level: flags.has('--debug') ? 'debug' : 'info',
+      toStderr: flags.has('--verbose'),
+    })
+  : undefined;
+
+const env = new ErEnv(getScenario(scenarioName), seed, logging);
 const viz = watch ? startViz(Number(process.env.ER_GYM_VIZ_PORT ?? 7777)) : NULL_VIZ;
 if (watch) {
   viz.publish(env);
@@ -129,3 +141,16 @@ const m = env.metrics();
 console.log(`\n=== ${scenarioName} (seed=${seed}) — ${steps} steps, ${m.simMinutes} sim minutes ===\n`);
 console.log('reward:', JSON.stringify(env.components, null, 2));
 console.log('\nmetrics:', JSON.stringify(m, null, 2));
+
+if (logging) {
+  const summaryPath = logging.close({
+    scenario: scenarioName,
+    seed,
+    steps,
+    reward: env.components,
+    metrics: m,
+  });
+  console.log(`\nevent log: ${logging.path}`);
+  console.log(`run summary: ${summaryPath}`);
+  console.log('event counts:', JSON.stringify(logging.tally));
+}

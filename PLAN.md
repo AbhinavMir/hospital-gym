@@ -27,7 +27,7 @@ interfaces without rewriting the ED.
    at once. S is not observable — only noisy proxies.
 6. **Attention is finite.** Interrupts occupy role-servers. Claimed ≠ true priority.
 
-## Status: Module 1 COMPLETE + live dashboard. Builds, 32/32 tests pass, MCP verified over stdio.
+## Status: Module 1 + dashboard + logging. Builds, 41/41 tests pass, MCP verified over stdio.
 Pushed: github.com/AbhinavMir/hospital-gym (public, main).
 
 Calibration sanity (seed-dependent, `ed-baseline`):
@@ -74,6 +74,28 @@ Calibration sanity (seed-dependent, `ed-baseline`):
   Renders the observation only, never world state; a test enforces that.
 - `tests/` — determinism (6) + exploit guards (14) + IT downtime (6) + viz (6). 32 total, all pass.
 - README with the v1 boarding limitation stated up front, and the caveat carried in `metrics()`
+
+### Iteration 2 (loop) — fixed
+- **`availableUnits()` used Math.floor → every capacity-1 pool was permanently dead.**
+  A consult service (pool 1) at any stress computed 0.8 units, floored to 0, and never
+  existed. So `order_consult` could never complete — meaning stroke (neurology) and STEMI
+  (cardiology/cath-lab) were UNTREATABLE by any policy. Now rounds.
+- **Consult requests were never polled.** Set in the action handler, read by nothing.
+  Added `consultTick`: completes the order, advances treatment, and declines loudly when
+  the consultant will not come (that is a disposition decision, not a wait).
+- **OR dispositions never departed.** `orRequests` now tracked and polled.
+- **Queued requests waited forever.** Added `queueTimeoutMinutes` per process — an infinite
+  wait is not a decision. Tuned per semantics: EVS/internal transport are staff and do not
+  decline (long timeout); consults 2h; psych beds 72h (the real long tail); rideshare 30m.
+- **EVS was structurally impossible.** 3 staff × 720m ÷ 25m hold ≈ 86 cleans vs 100+ needed,
+  and my new timeout made the ED re-request and lose queue position — a starvation livelock.
+  evsStaff 3→6. Result: EVS fill 0.24→0.80, declines 80→1, deaths 18→6, LWBS 0.26→0.09.
+- Metrics stubs now real: `supply.byProcess` (fill rate, ETA error, mean stress at request),
+  `evsTurnaroundP50`, `fallbackLadderDepthMean`, `meanStressAtBedRequest`, `diversionHours`
+  (reads the tally, no longer reverse-derived from the reward component).
+- `moduleCaveat` corrected — it still claimed the clairvoyant ceiling was computed.
+- Structured logging: `src/kernel/log.ts`, JSONL + run summary. `npm run logs`.
+  Tested that logging never consumes RNG (logged and unlogged runs are identical).
 
 ### Known gaps / next
 - `metrics().supply.byProcess` is a stub `{}` — needs per-process request/fill/no-show/decline

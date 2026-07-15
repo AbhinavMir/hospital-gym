@@ -76,7 +76,7 @@ function baseRegistry(startHour: number) {
     },
     consultServices: { cardiology: 1, neurology: 1, surgery: 1, psychiatry: 1, 'poison-control': 1, 'cath-lab': 1 },
     psychBedCapacity: 6,
-    evsStaff: 3,
+    evsStaff: 6,
     internalTransportStaff: 4,
     orRooms: 4,
   };
@@ -218,7 +218,7 @@ export const SCENARIOS: Record<string, () => ScenarioSpec> = {
       registry: {
         ...baseRegistry(9),
         ambient: { ...baseRegistry(9).ambient, baselineStress: 0.55 },
-        evsStaff: 3,
+        evsStaff: 7,
       },
     }),
 

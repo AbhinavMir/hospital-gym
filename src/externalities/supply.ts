@@ -26,6 +26,27 @@ export interface SupplyProcess<Spec = unknown> {
   cancel(id: string): CancelResult;
   /** Noisy, stale view of the pool. Never ground truth. */
   peek(): SupplyPeek;
+  /**
+   * Ground-truth counters for the metric report. NOT part of the agent's
+   * observation — this is the scorer looking at what actually happened, which
+   * is exactly what "fill rate reported against stress" requires.
+   */
+  stats(): SupplyStats;
+}
+
+export interface SupplyStats {
+  name: string;
+  requested: number;
+  accepted: number;
+  declined: number;
+  arrived: number;
+  noShows: number;
+  cancelled: number;
+  etaRevisions: number;
+  /** Mean |promised ETA - actual arrival| in minutes, over arrivals. */
+  etaErrorMean: number | null;
+  /** Mean system stress at request time. Lets fill rate be read against load. */
+  meanStressAtRequest: number | null;
 }
 
 export type SupplyStatus =
@@ -80,7 +101,19 @@ export interface StochasticSupplyConfig {
   hourCurve?: (hour: number) => number;
   /** Units are released back to the pool after this long. */
   holdMinutes: Minutes;
+  /**
+   * A request queued longer than this is declined outright.
+   *
+   * Without it, a dry pool leaves the agent waiting on a queue that will never
+   * move — and an infinite wait is not a decision. The world eventually tells
+   * you it is not coming, which is what turns "no overnight neurology" into a
+   * disposition decision rather than a stalled patient.
+   */
+  queueTimeoutMinutes?: Minutes;
 }
+
+/** Fallback when a config does not set one. Long enough to be a real wait. */
+const DEFAULT_QUEUE_TIMEOUT = 90;
 
 interface SupplyRequest {
   id: string;
@@ -88,6 +121,7 @@ interface SupplyRequest {
   state: SupplyStatus;
   acceptedAt: Minutes | null;
   holdsUnit: boolean;
+  queuedAt: Minutes;
 }
 
 /**
@@ -101,6 +135,11 @@ export class StochasticSupply<Spec = unknown> implements SupplyProcess<Spec> {
   private seq = 0;
   private inUse = 0;
   private peekCache: { peek: SupplyPeek; at: Minutes } | null = null;
+  private c = { requested: 0, accepted: 0, declined: 0, arrived: 0, noShows: 0, cancelled: 0, etaRevisions: 0 };
+  private etaErrors: number[] = [];
+  private stressAtRequest: number[] = [];
+  /** Promised ETA at acceptance, per request, for ETA-accuracy scoring. */
+  private promisedEta = new Map<string, Minutes>();
 
   constructor(
     protected readonly engine: Engine,
@@ -111,7 +150,16 @@ export class StochasticSupply<Spec = unknown> implements SupplyProcess<Spec> {
     this.name = cfg.name;
   }
 
-  /** Units currently free, ground truth. Internal only. */
+  /**
+   * Units currently free, ground truth. Internal only.
+   *
+   * ROUND, not floor. Flooring silently destroys small pools: a consult service
+   * with capacity 1 at any stress above zero computes 0.8 units, floors to 0,
+   * and becomes permanently unavailable — so the service simply never exists.
+   * Rounding keeps a 1-unit pool real until availability genuinely drops below
+   * half, which is when "the consultant is not coming" is the intended meaning
+   * (e.g. the overnight hourCurve of 0.3).
+   */
   protected availableUnits(): number {
     const s = this.ambient.stress;
     const hourMult = this.cfg.hourCurve ? this.cfg.hourCurve(this.ambient.hour) : 1;
@@ -120,7 +168,7 @@ export class StochasticSupply<Spec = unknown> implements SupplyProcess<Spec> {
       this.cfg.baseAvailability *
       StressResponse.shrinks(s, this.cfg.availabilityAtMaxStress) *
       hourMult;
-    return Math.max(0, Math.floor(effective) - this.inUse);
+    return Math.max(0, Math.round(effective) - this.inUse);
   }
 
   protected currentEta(): Minutes {
@@ -132,10 +180,13 @@ export class StochasticSupply<Spec = unknown> implements SupplyProcess<Spec> {
   request(spec: Spec): string {
     const id = `${this.cfg.name}-${++this.seq}`;
     const s = this.ambient.stress;
+    this.c.requested++;
+    this.stressAtRequest.push(s);
     const declineP = StressResponse.probability(s, this.cfg.declineAtZeroStress, this.cfg.declineAtMaxStress);
 
     let state: SupplyStatus;
     if (this.rng.bool(declineP)) {
+      this.c.declined++;
       state = { status: 'declined', reason: `${this.cfg.name}: no units accepting` };
     } else if (this.availableUnits() <= 0) {
       state = { status: 'queued', position: this.queueDepth() + 1, eta: null };
@@ -143,7 +194,7 @@ export class StochasticSupply<Spec = unknown> implements SupplyProcess<Spec> {
       state = { status: 'accepted', eta: this.engine.now + this.currentEta(), etaRevisions: 0 };
     }
 
-    const req: SupplyRequest = { id, spec, state, acceptedAt: null, holdsUnit: false };
+    const req: SupplyRequest = { id, spec, state, acceptedAt: null, holdsUnit: false, queuedAt: this.engine.now };
     this.requests.set(id, req);
     if (state.status === 'accepted') this.onAccepted(req);
     return id;
@@ -152,10 +203,20 @@ export class StochasticSupply<Spec = unknown> implements SupplyProcess<Spec> {
   poll(id: string): SupplyStatus {
     const req = this.requests.get(id);
     if (!req) return { status: 'unknown' };
-    // Promote a queued request if a unit has since freed.
-    if (req.state.status === 'queued' && this.availableUnits() > 0 && this.isNextInQueue(req)) {
-      req.state = { status: 'accepted', eta: this.engine.now + this.currentEta(), etaRevisions: 0 };
-      this.onAccepted(req);
+
+    if (req.state.status === 'queued') {
+      // Promote a queued request if a unit has since freed.
+      if (this.availableUnits() > 0 && this.isNextInQueue(req)) {
+        req.state = { status: 'accepted', eta: this.engine.now + this.currentEta(), etaRevisions: 0 };
+        this.onAccepted(req);
+      } else {
+        // Give up on a queue that is going nowhere, so the agent can re-plan.
+        const timeout = this.cfg.queueTimeoutMinutes ?? DEFAULT_QUEUE_TIMEOUT;
+        if (this.engine.now - req.queuedAt > timeout) {
+          this.c.declined++;
+          req.state = { status: 'declined', reason: `${this.cfg.name}: queued ${Math.round(timeout)}m with no unit` };
+        }
+      }
     }
     return req.state;
   }
@@ -163,6 +224,7 @@ export class StochasticSupply<Spec = unknown> implements SupplyProcess<Spec> {
   cancel(id: string): CancelResult {
     const req = this.requests.get(id);
     if (!req) return { ok: true };
+    this.c.cancelled++;
     const late =
       req.acceptedAt !== null && this.engine.now - req.acceptedAt > this.cfg.cancelGraceMinutes;
     this.release(req);
@@ -187,6 +249,16 @@ export class StochasticSupply<Spec = unknown> implements SupplyProcess<Spec> {
     return { ...peek, staleness: 0 };
   }
 
+  stats(): SupplyStats {
+    const mean = (xs: number[]) => (xs.length ? Math.round((xs.reduce((a, b) => a + b, 0) / xs.length) * 100) / 100 : null);
+    return {
+      name: this.cfg.name,
+      ...this.c,
+      etaErrorMean: mean(this.etaErrors),
+      meanStressAtRequest: mean(this.stressAtRequest),
+    };
+  }
+
   // --- internals ------------------------------------------------------------
 
   private queueDepth(): number {
@@ -206,6 +278,8 @@ export class StochasticSupply<Spec = unknown> implements SupplyProcess<Spec> {
     req.acceptedAt = this.engine.now;
     req.holdsUnit = true;
     this.inUse++;
+    this.c.accepted++;
+    if (req.state.status === 'accepted') this.promisedEta.set(req.id, req.state.eta);
 
     const s = this.ambient.stress;
 
@@ -214,6 +288,7 @@ export class StochasticSupply<Spec = unknown> implements SupplyProcess<Spec> {
       const delay = this.rng.logSpread(this.cfg.baseEta * 0.5, 1.8);
       this.engine.schedule(this.rng.uniform(3, 12), `${this.cfg.name}:eta-revision`, () => {
         if (req.state.status !== 'accepted') return;
+        this.c.etaRevisions++;
         req.state = {
           status: 'accepted',
           eta: req.state.eta + delay,
@@ -230,9 +305,15 @@ export class StochasticSupply<Spec = unknown> implements SupplyProcess<Spec> {
     const settle = () => {
       if (req.state.status !== 'accepted') return;
       if (willNoShow) {
+        this.c.noShows++;
         req.state = { status: 'no-show', reason: `${this.cfg.name}: unit never arrived` };
         this.release(req);
       } else {
+        this.c.arrived++;
+        const promised = this.promisedEta.get(req.id);
+        // The gap between what was promised and what happened. An agent that
+        // plans against the first ETA is planning against this error.
+        if (promised !== undefined) this.etaErrors.push(Math.abs(this.engine.now - promised));
         req.state = { status: 'arrived', at: this.engine.now };
         this.engine.schedule(this.cfg.holdMinutes, `${this.cfg.name}:release`, () => this.release(req));
       }

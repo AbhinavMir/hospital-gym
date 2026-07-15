@@ -99,6 +99,9 @@ export class ExternalityRegistry {
           // into an observation admission when no one will come see the patient.
           hourCurve: (h) => (h >= 19 || h < 7 ? 0.3 : 1),
           holdMinutes: 40,
+          // A consult that has not come in 2h is not coming. Saying so turns it
+          // into a disposition decision instead of an open-ended wait.
+          queueTimeoutMinutes: 120,
         }),
       );
     }
@@ -123,6 +126,9 @@ export class ExternalityRegistry {
         cancelGraceMinutes: 60,
         cancelCost: 0,
         holdMinutes: 24 * 60,
+        // The psych boarder waits days, not 90 minutes. Timing out here would
+        // erase the single longest boarding tail in a real ED.
+        queueTimeoutMinutes: 72 * 60,
       }),
     );
 
@@ -130,6 +136,10 @@ export class ExternalityRegistry {
     reg('evs', new StochasticSupply(engine, rng.fork('evs'), this.ambient, {
       name: 'evs',
       capacity: cfg.evsStaff,
+      // EVS never declines a bed — they are staff, not a market. They just get
+      // slow. A short timeout here made the ED re-request and lose its queue
+      // position, starving the oldest dirty bed indefinitely.
+      queueTimeoutMinutes: 8 * 60,
       baseAvailability: 1,
       availabilityAtMaxStress: 0.55,
       baseEta: 12,
@@ -149,6 +159,7 @@ export class ExternalityRegistry {
     reg('internal-transport', new StochasticSupply(engine, rng.fork('int-transport'), this.ambient, {
       name: 'internal-transport',
       capacity: cfg.internalTransportStaff,
+      queueTimeoutMinutes: 4 * 60,
       baseAvailability: 1,
       availabilityAtMaxStress: 0.5,
       baseEta: 10,
@@ -202,6 +213,7 @@ export class ExternalityRegistry {
       // next emergent case waits. Daytime rooms are eaten by the elective block.
       hourCurve: (h) => (h >= 19 || h < 7 ? 0.2 : h >= 7 && h < 17 ? 0.45 : 1),
       holdMinutes: 150,
+      queueTimeoutMinutes: 3 * 60,
     }));
 
     this.interruptGen = new InterruptGenerator(

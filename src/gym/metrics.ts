@@ -86,7 +86,24 @@ export interface Metrics {
 
   supply: {
     /** Fill rate and ETA accuracy per process, reported against mean stress. */
-    byProcess: Record<string, { requested: number; filled: number; noShows: number; declines: number }>;
+    byProcess: Record<
+      string,
+      {
+        requested: number;
+        accepted: number;
+        arrived: number;
+        declined: number;
+        noShows: number;
+        cancelled: number;
+        /** arrived / requested. The number that matters. */
+        fillRate: number | null;
+        etaRevisions: number;
+        /** Mean |promised - actual| minutes. Plan against the first ETA at your peril. */
+        etaErrorMean: number | null;
+        /** Mean S when requests were made, so fill rate is readable against load. */
+        meanStressAtRequest: number | null;
+      }
+    >;
     fallbackLadderDepthMean: number | null;
     wastedRequests: number;
   };
@@ -304,9 +321,28 @@ export function collectMetrics(env: ErEnv): Metrics {
     },
 
     supply: {
-      byProcess: {},
-      fallbackLadderDepthMean: null,
-      wastedRequests: 0,
+      byProcess: Object.fromEntries(
+        [...env.registry.supply.values()].map((proc) => {
+          const st = proc.stats();
+          return [
+            st.name,
+            {
+              requested: st.requested,
+              accepted: st.accepted,
+              arrived: st.arrived,
+              declined: st.declined,
+              noShows: st.noShows,
+              cancelled: st.cancelled,
+              fillRate: st.requested ? round2(st.arrived / st.requested) : null,
+              etaRevisions: st.etaRevisions,
+              etaErrorMean: st.etaErrorMean,
+              meanStressAtRequest: st.meanStressAtRequest,
+            },
+          ];
+        }),
+      ),
+      fallbackLadderDepthMean: mean(env.ladderDepths),
+      wastedRequests: env.wastedSupplyRequests,
     },
 
     anticipation: {
@@ -314,13 +350,16 @@ export function collectMetrics(env: ErEnv): Metrics {
       preAlertsActedOn: actedOn,
       traumaOverTriage: overTriage,
       traumaUnderTriage: underTriage,
-      meanStressAtBedRequest: null,
+      // Did capacity actions PRECEDE the crunch or follow it? Requesting beds
+      // while stress is still low is the anticipatory behaviour; requesting
+      // them only once stress is high is reacting.
+      meanStressAtBedRequest: mean(env.stressAtBedRequest),
     },
 
     capacity: {
       ratioBreaches: safety['ratio-breach'] ?? 0,
-      evsTurnaroundP50: null,
-      diversionHours: round2(env.components.diversion / -60 || 0),
+      evsTurnaroundP50: p50(env.ed.evsTurnarounds),
+      diversionHours: round2(env.diversionHoursTotal),
       overtimeHours: round2(env.ed.overtimeUsed / 60),
       floatUsed: env.ed.floatUsedCount,
     },
@@ -329,10 +368,10 @@ export function collectMetrics(env: ErEnv): Metrics {
 
     moduleCaveat:
       'Module 1 (ER only). Downstream bed release is exogenous and the agent cannot influence it, ' +
-      'so boarding metrics measure boarding MANAGEMENT, not boarding ELIMINATION. The clairvoyant ' +
-      'ceiling is computed against the same release process, so it is honest for this module. ' +
-      'When Module 2 (inpatient wards) lands, the ceiling rises and the same policy is re-benchmarked; ' +
-      'that delta is the measurement of what the hospital module buys.',
+      'so boarding metrics measure boarding MANAGEMENT, not boarding ELIMINATION. ' +
+      'NO clairvoyant upper bound is implemented yet: compare policies to each other and to the ' +
+      'reference policy, never to an absolute ceiling. Parameters are plausible, not fitted to real ' +
+      'ED data — recalibrate before drawing research conclusions.',
   };
 }
 

@@ -46,6 +46,9 @@ export class EdDepartment {
   /** ED beds waiting on EVS, in the order the agent prioritised them. */
   private cleaningQueue: BedId[] = [];
   private evsRequests = new Map<BedId, string>();
+  /** Dirty -> clean, per bed. The EVS loop's actual turnaround. */
+  readonly evsTurnarounds: number[] = [];
+  private dirtySince = new Map<BedId, Minutes>();
   private floatUsed = 0;
   private overtimeMinutes = 0;
 
@@ -148,6 +151,7 @@ export class EdDepartment {
     bed.patient = null;
     bed.status = 'dirty';
     bed.needsTerminalClean = patient.isolation !== 'none';
+    this.dirtySince.set(bedId, this.engine.now);
     if (!this.cleaningQueue.includes(bedId)) this.cleaningQueue.push(bedId);
   }
 
@@ -183,6 +187,11 @@ export class EdDepartment {
             this.engine.schedule(duration, 'ed:clean-done', () => {
               bed.status = 'clean';
               bed.needsTerminalClean = false;
+              const since = this.dirtySince.get(bedId);
+              if (since !== undefined) {
+                this.evsTurnarounds.push(this.engine.now - since);
+                this.dirtySince.delete(bedId);
+              }
             });
           } else if (st.status === 'no-show' || st.status === 'declined' || st.status === 'cancelled') {
             this.evsRequests.delete(bedId);

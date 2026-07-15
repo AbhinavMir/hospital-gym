@@ -1,5 +1,6 @@
 import { Engine, HOUR, type Minutes, formatClock, hourOfDay } from '../kernel/engine.js';
 import { Rng } from '../kernel/rng.js';
+import { Logger, NULL_LOGGER, makeEmitter, type Emitter, type LoggerOptions } from '../kernel/log.js';
 import {
   advanceLatent,
   inDangerZone,
@@ -25,7 +26,7 @@ import { BloodBank, LAB_TESTS, Laboratory } from '../modules/labs.js';
 import { IMAGING_STUDIES, Imaging, type Modality } from '../modules/imaging.js';
 import { DRUGS, Pharmacy } from '../modules/pharmacy.js';
 import { ArrivalProcess } from '../modules/arrivals.js';
-import { TIER_COST, tierSatisfies, type TransportTier } from '../externalities/transport.js';
+import { DISCHARGE_LADDER, TIER_COST, tierSatisfies, type TransportTier } from '../externalities/transport.js';
 import { ActionSchema, actionMask, type Action, type ActionResult } from './actions.js';
 import { DOOR_TO_PROVIDER_TARGET, computeReward, DEFAULT_WEIGHTS, type RewardComponents, type RewardTally } from './reward.js';
 import { buildObservation, type Observation } from './observation.js';
@@ -85,16 +86,48 @@ export class ErEnv {
   private transportRequests = new Map<PatientId, { tier: TransportTier; id: string }>();
   /** Consult requests, by order. */
   private consultRequests = new Map<OrderId, { service: string; id: string }>();
+  /** OR requests, by patient. */
+  private orRequests = new Map<PatientId, string>();
   /** Reassessment intervals set by the agent. */
   private reassessInterval = new Map<PatientId, Minutes>();
+  /**
+   * How far down the transport fallback ladder each patient ended up.
+   * rideshare=1, nemt=2, taxi=3, family=4. Depth is the cost of a doomed
+   * dispatch the agent waited through instead of re-planning early.
+   */
+  readonly ladderDepths: number[] = [];
+  private ladderAttempts = new Map<PatientId, number>();
+  /** System stress at the moment each bed request was submitted. */
+  readonly stressAtBedRequest: number[] = [];
 
   private tally: RewardTally = emptyTally();
   private lastComponents: RewardComponents = computeReward(emptyTally());
   private prevTotal = 0;
   private lastAdvance: Minutes = 0;
 
-  constructor(readonly scenario: ScenarioSpec, readonly seed: number | string) {
+  readonly log: Logger;
+  /** Bound emitter: stamps sim time, clock, and step onto every event. */
+  private readonly ev: Emitter;
+
+  constructor(
+    readonly scenario: ScenarioSpec,
+    readonly seed: number | string,
+    logging?: Partial<LoggerOptions> | Logger,
+  ) {
     this.rng = new Rng(seed);
+
+    this.log =
+      logging instanceof Logger
+        ? logging
+        : logging
+          ? new Logger({ runId: `${scenario.name}-${seed}`, ...logging })
+          : NULL_LOGGER;
+    this.ev = makeEmitter(
+      this.log,
+      () => this.engine.now,
+      () => formatClock(this.engine.now, this.scenario.startHour),
+      () => this.stepCount,
+    );
 
     this.registry = new ExternalityRegistry(
       this.engine,
@@ -163,6 +196,7 @@ export class ErEnv {
     this.physiologyTick();
     this.lwbsTick();
     this.boardingTick();
+    this.consultTick();
     this.scheduleDowntimeFreezes();
   }
 
@@ -184,13 +218,26 @@ export class ErEnv {
           ok: false,
           reason: `invalid action: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`,
         });
+        this.ev('action.invalid', 'schema rejected', { raw: raw as Record<string, unknown> });
         continue;
       }
-      results.push(this.apply(parsed.data));
+      const r = this.apply(parsed.data);
+      results.push(r);
+      this.ev(
+        r.ok ? 'action.ok' : 'action.refused',
+        r.reason,
+        { action: r.action, ...(r.data ?? {}) },
+        { patient: (parsed.data as { patient?: string }).patient ?? null },
+      );
     }
 
     this.engine.runUntil(this.engine.now + this.scenario.tickMinutes);
     this.stepCount++;
+    this.ev('step', undefined, {
+      census: [...this.patients.values()].filter((p) => p.phase !== 'departed').length,
+      boarding: [...this.patients.values()].filter((p) => p.phase === 'boarding').length,
+      stress: Math.round(this.registry.ambient.stress * 1000) / 1000,
+    });
 
     this.settleTally();
     const components = computeReward(this.tally, this.scenario.weights ?? DEFAULT_WEIGHTS);
@@ -229,6 +276,15 @@ export class ErEnv {
 
   get onDiversion(): boolean {
     return this.diversion;
+  }
+
+  /** Total diversion hours, closed + currently open. */
+  get diversionHoursTotal(): number {
+    return this.diversionHours + (this.diversionSince !== null ? (this.engine.now - this.diversionSince) / 60 : 0);
+  }
+
+  get wastedSupplyRequests(): number {
+    return this.tally.wastedSupplyRequests;
   }
 
   get now(): Minutes {
@@ -686,6 +742,17 @@ export class ErEnv {
         });
         this.bedRequests.set(p.id, id);
         if (p.bedRequestTime === null) p.bedRequestTime = this.engine.now;
+        this.stressAtBedRequest.push(this.registry.ambient.stress);
+        this.ev(
+          'bed.request',
+          `${a.level} bed requested`,
+          {
+            level: a.level,
+            leadMinutes:
+              p.dispositionDecisionTime !== null ? Math.round(this.engine.now - p.dispositionDecisionTime) : null,
+          },
+          { patient: p.id },
+        );
         return ok({ request: id, state: this.downstream.poll(id) });
       }
 
@@ -760,6 +827,8 @@ export class ErEnv {
         p.disposition = { kind: 'or' };
         const orProc = this.registry.get('or-room');
         const id = orProc.request({ patient: p.id });
+        this.orRequests.set(p.id, id);
+        this.ev('supply.request', 'OR requested', { request: id }, { patient: p.id });
         return ok({ orRequest: id, state: orProc.poll(id) });
       }
 
@@ -791,6 +860,9 @@ export class ErEnv {
 
         this.transportRequests.set(p.id, { tier: a.tier, id });
         this.tally.transportCostUnits += TIER_COST[a.tier];
+        const depth = DISCHARGE_LADDER.indexOf(a.tier);
+        if (depth >= 0) this.ladderAttempts.set(p.id, depth + 1);
+        this.ev('supply.request', `${a.tier} dispatched`, { tier: a.tier, direct: a.direct }, { patient: p.id });
         return ok({ request: id, state: proc.poll(id) });
       }
 
@@ -848,6 +920,12 @@ export class ErEnv {
       return;
     }
     this.patients.set(p.id, p);
+    this.ev(
+      'patient.arrive',
+      p.chiefComplaint,
+      { mode: p.arrivalMode, isolation: p.isolation },
+      { patient: p.id },
+    );
   }
 
   private placeOrder(
@@ -963,6 +1041,7 @@ export class ErEnv {
       this.recordedFloors.add(key);
     }
     this.safetyEvents.push({ kind, at: this.engine.now, patient, detail });
+    this.ev('safety', detail, { violation: kind }, { patient, level: 'error' });
   }
 
   /**
@@ -995,11 +1074,23 @@ export class ErEnv {
           this.tally.deteriorations++;
           p.flags.add('deteriorated');
           if (p.phase === 'boarding') p.flags.add('deteriorated-while-boarding');
+          this.ev(
+            'patient.deteriorate',
+            `crossed severity 0.7 while ${p.phase}`,
+            { phase: p.phase, esi: p.esi, vitalsAge: p.lastVitalsTime === null ? null : Math.round(this.engine.now - p.lastVitalsTime) },
+            { patient: p.id, level: 'warn' },
+          );
         }
 
         if (p.latent.dead && !p.flags.has('counted-death')) {
           p.flags.add('counted-death');
           this.tally.deaths++;
+          this.ev(
+            'patient.death',
+            `died in department after ${Math.round(this.engine.now - p.arrivalTime)}m`,
+            { condition: p.latent.condition, esi: p.esi, phase: p.phase, workup: Math.round(p.latent.treatmentProgress * 100) },
+            { patient: p.id, level: 'error' },
+          );
           p.disposition = { kind: 'died' };
           p.phase = 'departed';
           p.departureTime = this.engine.now;
@@ -1080,13 +1171,87 @@ export class ErEnv {
       }
 
       if (p.disposition.kind === 'or') {
-        // The OR takes them when the room is ready. Module 4 makes this real.
+        // The OR takes them when the room is ready. Module 4 makes the room a
+        // real simulation; the interface and this departure path do not change.
+        const reqId = this.orRequests.get(p.id);
+        if (!reqId) continue;
+        const st = this.registry.get('or-room').poll(reqId);
+        if (st.status === 'arrived') {
+          this.ev('patient.depart', 'to OR', { via: 'or-room' }, { patient: p.id });
+          this.depart(p);
+        } else if (st.status === 'declined' || st.status === 'no-show') {
+          // The room fell through. The agent has to notice and re-plan — an OR
+          // request during a full block is functionally a decline.
+          this.orRequests.delete(p.id);
+          this.ev('supply.declined', 'OR request fell through; re-plan needed', { patient: p.id }, { patient: p.id });
+        }
         continue;
       }
     }
   }
 
+  /**
+   * Poll consult requests and complete the order when the consultant actually
+   * turns up.
+   *
+   * Without this the agent can place a consult and nothing ever happens — no
+   * result, no treatment progress, no signoff. Since `neurology` is on the
+   * stroke pathway and `cardiology`/`cath-lab` are on the STEMI pathway, a dead
+   * consult loop means those patients can never be treated at all, no matter
+   * what the policy does.
+   */
+  private consultTick(): void {
+    this.engine.schedule(1, 'env:consults', () => {
+      for (const [orderId, req] of [...this.consultRequests]) {
+        const order = this.orders.get(orderId);
+        if (!order || order.status === 'complete' || order.status === 'cancelled') {
+          this.consultRequests.delete(orderId);
+          continue;
+        }
+        const proc = this.registry.get(`consult-${req.service}`);
+        const st = proc.poll(req.id);
+
+        if (st.status === 'arrived') {
+          order.status = 'complete';
+          order.completedAt = this.engine.now;
+          order.result = `${req.service}: seen, recommendations documented`;
+          this.consultRequests.delete(orderId);
+          this.onOrderResult(order);
+          this.ev(
+            'order.result',
+            `${req.service} consult complete`,
+            { service: req.service, minutes: Math.round(this.engine.now - order.placedAt) },
+            { patient: order.patient, order: orderId },
+          );
+        } else if (st.status === 'declined' || st.status === 'no-show') {
+          order.status = 'cancelled';
+          this.consultRequests.delete(orderId);
+          // Overnight, this is the whole game: a consult that will not come is a
+          // disposition decision, not a waiting game.
+          this.ev(
+            'supply.declined',
+            `${req.service} consult unavailable — this is a disposition decision, not a wait`,
+            { service: req.service, reason: st.status },
+            { patient: order.patient, order: orderId, level: 'warn' },
+          );
+        }
+      }
+      this.consultTick();
+    });
+  }
+
   private depart(p: Patient): void {
+    const depth = this.ladderAttempts.get(p.id);
+    if (depth !== undefined) {
+      this.ladderDepths.push(depth);
+      this.ladderAttempts.delete(p.id);
+    }
+    this.ev(
+      'patient.depart',
+      `${p.disposition?.kind} after ${Math.round(this.engine.now - p.arrivalTime)}m`,
+      { disposition: p.disposition?.kind, los: Math.round(this.engine.now - p.arrivalTime) },
+      { patient: p.id },
+    );
     p.phase = 'departed';
     p.departureTime = this.engine.now;
     const bed = this.ed.bedOf(p.id);
@@ -1094,6 +1259,7 @@ export class ErEnv {
     this.ed.unassign(p.id);
     this.bedRequests.delete(p.id);
     this.transportRequests.delete(p.id);
+    this.orRequests.delete(p.id);
   }
 
   /**
@@ -1117,6 +1283,12 @@ export class ErEnv {
           p.departureTime = this.engine.now;
           p.disposition = { kind: 'lwbs' };
           this.tally.lwbs++;
+          this.ev(
+            'patient.lwbs',
+            `left without being seen after ${Math.round(waited)}m`,
+            { esi: p.esi, waited: Math.round(waited) },
+            { patient: p.id, level: 'warn' },
+          );
           this.ed.unassign(p.id);
           const bed = this.ed.bedOf(p.id);
           if (bed) this.ed.vacate(bed.id, p);
@@ -1169,8 +1341,7 @@ export class ErEnv {
     this.tally.attentionMinutes = attention;
     this.tally.taskSwitchErrors = this.registry.attention.taskSwitchEvents.filter((e) => e.causedError).length;
 
-    this.tally.diversionHours =
-      this.diversionHours + (this.diversionSince !== null ? (this.engine.now - this.diversionSince) / 60 : 0);
+    this.tally.diversionHours = this.diversionHoursTotal;
     this.tally.overtimeHours = this.ed.overtimeUsed / 60;
 
     // Missed hard interrupt deadlines become safety events exactly once.

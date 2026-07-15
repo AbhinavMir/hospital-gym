@@ -67,6 +67,7 @@ export const TIER_COST: Record<TransportTier, number> = {
 export function rideshareConfig(): StochasticSupplyConfig {
   return {
     name: 'rideshare',
+    queueTimeoutMinutes: 30,
     capacity: 40,
     baseAvailability: 0.8,
     availabilityAtMaxStress: 0.35,
@@ -89,6 +90,7 @@ export function rideshareConfig(): StochasticSupplyConfig {
 export function nemtConfig(): StochasticSupplyConfig {
   return {
     name: 'nemt',
+    queueTimeoutMinutes: 150,
     capacity: 8,
     baseAvailability: 0.7,
     availabilityAtMaxStress: 0.4,
@@ -110,6 +112,7 @@ export function nemtConfig(): StochasticSupplyConfig {
 export function taxiVoucherConfig(): StochasticSupplyConfig {
   return {
     name: 'taxi-voucher',
+    queueTimeoutMinutes: 60,
     capacity: 12,
     baseAvailability: 0.75,
     availabilityAtMaxStress: 0.5,
@@ -130,6 +133,7 @@ export function taxiVoucherConfig(): StochasticSupplyConfig {
 export function familyPickupConfig(): StochasticSupplyConfig {
   return {
     name: 'family-pickup',
+    queueTimeoutMinutes: 180,
     capacity: 100,
     baseAvailability: 0.45, // family is often unreachable or unable
     availabilityAtMaxStress: 0.35,
