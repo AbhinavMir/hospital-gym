@@ -42,6 +42,23 @@ export interface PatientView {
   bedRequestLeadMinutes: number | null;
   orders: OrderView[];
   flags: string[];
+
+  /**
+   * The restraint clock, if restrained. The agent is charged for missing checks,
+   * so it must be able to see when the next one is due — a floor you cannot see
+   * coming is a trap, not a test.
+   */
+  restraint: {
+    kind: string;
+    appliedMinutesAgo: number;
+    checkIntervalMinutes: number;
+    minutesUntilCheckDue: number;
+    checksCompleted: number;
+    checksMissed: number;
+  } | null;
+  /** Under a psychiatric hold: cannot be discharged, needs a psych bed. */
+  psychHold: boolean;
+  sitter: string | null;
 }
 
 export interface OrderView {
@@ -216,6 +233,21 @@ export function buildObservation(env: ErEnv): Observation {
           : null,
       orders,
       flags: [...p.flags],
+      restraint:
+        p.restraint && p.restraint.releasedAt === null
+          ? {
+              kind: p.restraint.kind,
+              appliedMinutesAgo: Math.round(now - p.restraint.appliedAt),
+              checkIntervalMinutes: p.restraint.checkIntervalMinutes,
+              minutesUntilCheckDue: Math.round(
+                p.restraint.lastCheckAt + p.restraint.checkIntervalMinutes - now,
+              ),
+              checksCompleted: p.restraint.checksCompleted,
+              checksMissed: p.restraint.checksMissed,
+            }
+          : null,
+      psychHold: p.psychHold,
+      sitter: p.sitter,
     });
   }
 

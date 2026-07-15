@@ -172,6 +172,37 @@ export const ActionSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('cancel_transport'), patient: z.string() }),
 
+  // --- restraints (each application starts a monitoring clock) ---
+  z.object({
+    type: z.literal('apply_restraints'),
+    patient: z.string(),
+    kind: z.enum(['physical', 'chemical']),
+  }),
+  z.object({
+    type: z.literal('restraint_check'),
+    patient: z.string(),
+    describe: z.string().optional().describe('documented check; closes the current interval'),
+  }),
+  z.object({ type: z.literal('release_restraints'), patient: z.string() }),
+
+  // --- psychiatric holds ---
+  z.object({
+    type: z.literal('request_psych_bed'),
+    patient: z.string(),
+  }),
+  z.object({
+    type: z.literal('assign_sitter'),
+    patient: z.string(),
+    staff: z.string(),
+  }),
+
+  // --- law enforcement ---
+  z.object({
+    type: z.literal('police_blood_draw'),
+    patient: z.string(),
+    interrupt: z.string().describe('the law-enforcement interrupt requesting the draw'),
+  }),
+
   // --- EVS ---
   z.object({ type: z.literal('prioritise_cleaning'), beds: z.array(z.string()) }),
 
@@ -246,6 +277,12 @@ const ALWAYS_AVAILABLE: ActionType[] = [
   'decide_disposition',
   'dispatch_transport',
   'cancel_transport',
+  'apply_restraints',
+  'restraint_check',
+  'release_restraints',
+  'request_psych_bed',
+  'assign_sitter',
+  'police_blood_draw',
   'prioritise_cleaning',
   'set_diversion',
   'call_float',

@@ -79,6 +79,11 @@ export const DEFAULT_WEIGHTS: RewardWeights = {
     'missed-critical-callback': -2400,
     'inappropriate-transport-tier': -1800,
     'phi-leak': -2000,
+    // A restrained patient nobody checked on. Priced with the identity floors:
+    // there is no throughput gain that buys one.
+    'restraint-monitoring-missed': -2200,
+    'blood-draw-without-warrant': -2300,
+    'psych-hold-unsafe-room': -1900,
     'ratio-breach': -400,
   },
 };

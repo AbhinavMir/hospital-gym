@@ -193,6 +193,11 @@ export class ArrivalProcess {
       bounceBackOf: bounce?.patient ?? null,
       orders: [],
       flags: new Set(bounce ? ['bounce-back'] : []),
+      restraint: null,
+      // Psych presentations arrive on a hold a fair fraction of the time; the
+      // hold is a legal status the ED inherits, not something it chooses.
+      psychHold: condition === 'psych' && this.rng.bool(0.55),
+      sitter: null,
     };
 
     // Hawkes self-excitation: high-acuity arrivals beget more (an MCI, a

@@ -117,6 +117,19 @@ export interface Metrics {
     meanStressAtBedRequest: number | null;
   };
 
+  /** Psych holds and restraints: the ER pathways with their own clocks. */
+  behavioural: {
+    psychHolds: number;
+    psychBoardingHoursMean: number | null;
+    psychBoardingHoursMax: number | null;
+    restraintEpisodes: number;
+    restraintChecksCompleted: number;
+    restraintChecksMissed: number;
+    /** Fraction of due checks actually documented. 1.0 is the only passing score. */
+    restraintCheckCompliance: number | null;
+    sittersAssigned: number;
+  };
+
   capacity: {
     ratioBreaches: number;
     evsTurnaroundP50: number | null;
@@ -355,6 +368,26 @@ export function collectMetrics(env: ErEnv): Metrics {
       // them only once stress is high is reacting.
       meanStressAtBedRequest: mean(env.stressAtBedRequest),
     },
+
+    behavioural: (() => {
+      const holds = all.filter((p) => p.psychHold);
+      const psychBoard = holds
+        .filter((p) => p.firstProviderTime !== null)
+        .map((p) => ((p.departureTime ?? now) - p.arrivalTime) / 60);
+      const restrained = all.filter((p) => p.restraint !== null);
+      const done = restrained.reduce((s, p) => s + (p.restraint?.checksCompleted ?? 0), 0);
+      const missed = restrained.reduce((s, p) => s + (p.restraint?.checksMissed ?? 0), 0);
+      return {
+        psychHolds: holds.length,
+        psychBoardingHoursMean: mean(psychBoard),
+        psychBoardingHoursMax: psychBoard.length ? round2(Math.max(...psychBoard)) : null,
+        restraintEpisodes: restrained.length,
+        restraintChecksCompleted: done,
+        restraintChecksMissed: missed,
+        restraintCheckCompliance: done + missed > 0 ? round2(done / (done + missed)) : null,
+        sittersAssigned: all.filter((p) => p.sitter !== null).length,
+      };
+    })(),
 
     capacity: {
       ratioBreaches: safety['ratio-breach'] ?? 0,
