@@ -32,6 +32,7 @@ import { LAB_TESTS } from '../src/modules/labs.js';
 import { IMAGING_STUDIES } from '../src/modules/imaging.js';
 import { DRUGS } from '../src/modules/pharmacy.js';
 import { Logger } from '../src/kernel/log.js';
+import { patientActions, departmentActions } from '../src/gym/legal.js';
 
 // --- config ------------------------------------------------------------------
 
@@ -61,6 +62,7 @@ interface Cfg {
   maxSteps: number;
   temperature: number;
   log: boolean;
+  showLegal: boolean;
 }
 
 function parseArgs(argv: string[]): Cfg {
@@ -84,6 +86,10 @@ function parseArgs(argv: string[]): Cfg {
     maxSteps: Number(get('--max-steps', '0')), // 0 = full shift
     temperature: Number(get('--temperature', '0.2')),
     log: has('--log'),
+    // --show-legal is the PARITY condition: hand the model the same
+    // per-patient legal-action list the human UI surfaces as buttons. On by
+    // default with --no-legal to turn it off (the raw-tool-call condition).
+    showLegal: !has('--no-legal'),
   };
 }
 
@@ -198,19 +204,37 @@ function compactObs(o: Observation) {
   };
 }
 
+/**
+ * The per-patient legal-action list — the SAME set the human UI shows as
+ * buttons. Passing it is the parity condition: both agents then know which
+ * moves are legal right now, so the only remaining difference is input modality.
+ */
+function legalSummary(env: ErEnv): string {
+  const perPatient = [...env.patients.values()]
+    .filter((p) => p.phase !== 'departed')
+    .map((p) => {
+      const moves = patientActions(env, p).groups.flatMap((g) => g.buttons.map((b) => b.label));
+      const orders = patientActions(env, p).orderMenus.map((m) => `order_${m.kind}`);
+      return `${p.id}: ${[...moves, ...orders].join(', ') || '(none)'}`;
+    });
+  const dept = departmentActions(env).flatMap((g) => g.buttons.map((b) => b.label));
+  return `LEGAL MOVES RIGHT NOW (you may also do others, but these are valid):\n${perPatient.join('\n')}\nDEPARTMENT: ${dept.join(', ')}`;
+}
+
 /** Build the message list for one step. */
-function buildMessages(o: Observation, lastResults: ActionResult[]): { role: string; content: string }[] {
+function buildMessages(env: ErEnv, o: Observation, lastResults: ActionResult[], showLegal: boolean): { role: string; content: string }[] {
   const refused = lastResults.filter((r) => !r.ok);
   const feedback =
     refused.length > 0
       ? `\nLast step, these actions were REFUSED — adapt:\n` +
         refused.map((r) => `- ${r.action}: ${r.reason}`).join('\n')
       : '';
+  const legal = showLegal ? `\n\n${legalSummary(env)}` : '';
   return [
     { role: 'system', content: `${systemPrompt()}\n\n${actionReference()}` },
     {
       role: 'user',
-      content: `Current board:\n${JSON.stringify(compactObs(o), null, 1)}${feedback}\n\nYour actions for this step:`,
+      content: `Current board:\n${JSON.stringify(compactObs(o), null, 1)}${legal}${feedback}\n\nYour actions for this step:`,
     },
   ];
 }
@@ -341,7 +365,7 @@ async function main() {
   while (!done) {
     let reply: string;
     try {
-      reply = cfg.dryRun ? stubReply(obs) : await callModel(cfg, buildMessages(obs, lastResults));
+      reply = cfg.dryRun ? stubReply(obs) : await callModel(cfg, buildMessages(env, obs, lastResults, cfg.showLegal));
     } catch (e) {
       console.error(`step ${step}: model call failed — ${(e as Error).message}`);
       console.error('stopping. partial metrics below.');

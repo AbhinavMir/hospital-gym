@@ -43,6 +43,20 @@ Open <http://127.0.0.1:7777>. It shows the bed grid, the patient board (sickest 
 
 The board renders the *observation*, not the world — it shows exactly what the agent can see and no more. A test enforces this: if latent state ever leaked into a frame, the dashboard is exactly where it would go unnoticed.
 
+## Play it yourself (human study)
+
+```bash
+npm run play          # then open http://127.0.0.1:7788
+```
+
+Turn-based, point-and-click. You are the charge nurse: click a patient, click the actions that are legal for them right now, queue them for the window, advance 5 minutes. At the end you get a normalized score against the same null/oracle anchors an AI is measured on, and the run is saved to `runs/<player>_<id>.sqlite` — the **identical record** an AI run writes. So human, AI, and oracle land on one comparable scale.
+
+The action menus unfold in clinical order — *Assess → Triage → Place in bed → Assign staff → Orders + Disposition → move the patient* — so the workflow is discoverable rather than something you must know in advance.
+
+### Fair human-vs-AI comparison
+
+The click menu shows only the moves that are legal for a patient now. To keep the comparison honest, the LLM adapter is handed that **same** legal-action list each turn (`--show-legal`, on by default; `--no-legal` for the raw-tool-call condition). Both agents then know the same set of legal moves — the only remaining difference is input modality (click vs. JSON), which is an acknowledged limitation, not an information gap. Running the AI in both conditions isolates interface friction from reasoning.
+
 ## Drive it with an LLM
 
 A single-file reference client, `examples/llm-policy.ts`, plays a shift with any model through OpenRouter — swapping models is one argument:

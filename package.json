@@ -27,7 +27,8 @@
     "watch": "tsx examples/random-policy.ts ed-baseline demo-seed --watch",
     "logs": "tsx examples/random-policy.ts ed-baseline demo-seed --log",
     "bench": "tsx examples/bench.ts",
-    "llm": "tsx examples/llm-policy.ts"
+    "llm": "tsx examples/llm-policy.ts",
+    "play": "tsx src/human/server.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",

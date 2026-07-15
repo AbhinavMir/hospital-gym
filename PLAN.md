@@ -38,7 +38,25 @@ interfaces without rewriting the ED.
   sync step loop). Steps persist before er_step returns, so a crashed client still leaves a
   complete trail. `er_sessions` lists open runs. 8 tests in tests/sessions.test.ts.
 
-### THE BIG ONE: no LLM has ever played this.
+### Human-playable interface (done) — for the human-vs-AI study
+- `npm run play` → turn-based point-and-click charge-nurse UI (src/human/). Reuses the session
+  store, so a human run writes the identical SQLite record an AI run does; human/AI/oracle on
+  one scale. Final screen shows the normalized score vs null/oracle anchors (computed on finish).
+- `src/gym/legal.ts` — contextual legal actions, ONE source of truth. The human sees them as
+  buttons that unfold in clinical order (Assess->Triage->Room->Staff->Orders->Dispo->move);
+  the AI is handed the same list each turn (--show-legal, default on; --no-legal = raw condition).
+  This is the affordance-parity mechanism: both agents know the same legal moves, only input
+  modality differs. 6 tests in tests/legal.test.ts.
+- Note for the paper: run AI in both --show-legal and --no-legal to isolate interface friction
+  from reasoning. gpt-4o-mini's failure (never tried place_bed) is exactly what --show-legal
+  tests — does surfacing "Place in bed" as a legal move fix it, or is it a planning failure.
+
+### First real model result: gpt-4o-mini, ed-baseline s1
+- Score -0.28 (worse than doing nothing). null -114,636 / oracle -29,826 / gpt -138,703.
+- Behaviour: measured vitals 1555x, NEVER tried place_bed, never assigned a provider, never
+  treated anyone. 69% LWBS, 10 deaths = same as an empty department. Single seed — noisy.
+
+### (historical) no LLM had played this — now one has.
 `npm run bench` benchmarks three HARDCODED policies (null/reference/oracle). The MCP server
 works and is stdio-verified, but no model has driven an episode. The entire premise — that this
 measures AI scheduling ability — is UNTESTED. Everything else is scaffolding until that runs.
