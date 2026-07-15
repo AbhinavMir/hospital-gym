@@ -26,7 +26,7 @@ import { BloodBank, LAB_TESTS, Laboratory } from '../modules/labs.js';
 import { IMAGING_STUDIES, Imaging, type Modality } from '../modules/imaging.js';
 import { DRUGS, Pharmacy } from '../modules/pharmacy.js';
 import { ArrivalProcess } from '../modules/arrivals.js';
-import { DISCHARGE_LADDER, TIER_COST, tierSatisfies, type TransportTier } from '../externalities/transport.js';
+import { DISCHARGE_LADDER, EmsAgency, TIER_COST, tierSatisfies, type TransportTier } from '../externalities/transport.js';
 import { ActionSchema, actionMask, type Action, type ActionResult } from './actions.js';
 import { DOOR_TO_PROVIDER_TARGET, computeReward, DEFAULT_WEIGHTS, type RewardComponents, type RewardTally } from './reward.js';
 import { buildObservation, type Observation } from './observation.js';
@@ -302,13 +302,11 @@ export class ErEnv {
     return this.bedRequests.get(patient);
   }
 
-  transportOf(patient: PatientId) {
-    return this.transportRequests.get(patient);
+  /** Whether a transport request is already open for this patient. */
+  hasTransport(patient: PatientId): boolean {
+    return this.transportRequests.has(patient);
   }
 
-  reassessmentOf(patient: PatientId): Minutes | undefined {
-    return this.reassessInterval.get(patient);
-  }
 
   /**
    * Frozen order snapshot taken when an IT downtime window opens.
@@ -422,6 +420,28 @@ export class ErEnv {
         if (a.isolation) p.isolation = a.isolation;
         p.phase = 'waiting-room';
         return ok({ esi: a.esi });
+      }
+
+      case 'retriage': {
+        const p = P(a.patient);
+        if (!p) return no(`unknown patient ${a.patient}`);
+        if (p.triageTime === null) return no('patient has not been triaged yet — use triage');
+        if (p.lastVitals === null) return no('retriage requires vitals: measure_vitals first');
+        // Same danger-zone floor as initial triage. A patient who decompensates
+        // in the waiting room and is re-triaged as a 4 is the same error as
+        // under-triaging them at the door, and it is scored the same way.
+        if (inDangerZone(p.lastVitals) && a.esi > 2) {
+          this.recordSafety(
+            'under-triage-danger-zone',
+            p.id,
+            `retriaged to ESI ${a.esi} with danger-zone vitals ${JSON.stringify(p.lastVitals)}`,
+          );
+        }
+        const from = p.esi;
+        p.esi = a.esi;
+        p.flags.add('retriaged');
+        this.ev('patient.triage', `retriaged ${from} -> ${a.esi}`, { from, to: a.esi }, { patient: p.id });
+        return ok({ from, to: a.esi });
       }
 
       case 'route': {
@@ -626,6 +646,15 @@ export class ErEnv {
         return ok({ readyAt: Math.round(r.readyAt) });
       }
 
+      case 'stop_mtp': {
+        const p = P(a.patient);
+        if (!p) return no(`unknown patient ${a.patient}`);
+        if (!this.bloodBank.isMtpActive(p.id)) return no('no massive transfusion protocol is running');
+        this.bloodBank.stopMtp(p.id);
+        this.ev('note', 'MTP stopped', {}, { patient: p.id });
+        return ok();
+      }
+
       case 'warm_blood_bank': {
         const p = P(a.patient);
         if (!p) return no(`unknown patient ${a.patient}`);
@@ -701,7 +730,9 @@ export class ErEnv {
         if (!r.ok && r.illegalDeferral) {
           const entry = this.registry.attention.get(a.interrupt);
           const kind: SafetyViolation =
-            entry?.interrupt.source === 'critical-callback' ? 'missed-critical-callback' : 'phi-leak';
+            entry?.interrupt.source === 'critical-callback'
+              ? 'missed-critical-callback'
+              : 'mandatory-reporting-missed';
           this.recordSafety(kind, entry?.interrupt.patient ?? null, `illegal deferral of ${entry?.interrupt.source}`);
           return no('this interrupt class cannot be deferred — that is a hard floor');
         }
@@ -829,6 +860,37 @@ export class ErEnv {
           return ok();
         }
 
+        if (a.disposition === 'ama') {
+          // A patient leaving against medical advice. A hold cannot: that is the
+          // whole point of a hold.
+          if (p.psychHold) return no('a patient on a psychiatric hold cannot leave AMA');
+          const risk = unsafeDischargeRisk(p.latent);
+          p.disposition = { kind: 'ama' };
+          // AMA is a reportable event. It is NOT an unsafe-destination floor —
+          // the agent did not choose it, the patient did — but the clinical risk
+          // still lands on the department, and it still bounces back.
+          this.registry.attention.raise({
+            source: 'legal-risk',
+            channel: 'risk-management',
+            claimedPriority: 2,
+            truePriority: 2,
+            roleRequired: 'ed-attending',
+            delegableTo: [],
+            resolutionCost: this.rng.logSpread(10, 1.3),
+            responseDeadline: this.engine.now + 120,
+            deferability: 'schedulable',
+            hardFloorIfMissed: false,
+            consequenceIfMissed: 'AMA departure undocumented',
+            patient: p.id,
+            batchable: false,
+            meta: { trigger: 'ama-departure' },
+          });
+          this.arrivals.recordDischarge(p, risk);
+          this.ev('patient.depart', 'left against medical advice', { unsafeRisk: round2(risk) }, { patient: p.id, level: 'warn' });
+          this.depart(p);
+          return ok({ unsafeRisk: round2(risk) });
+        }
+
         if (a.disposition === 'transfer-out') {
           p.disposition = { kind: 'transfer-out' };
           return ok();
@@ -860,20 +922,43 @@ export class ErEnv {
           return no(`tier ${a.tier} cannot safely carry this patient (${describeNeed(need)})`);
         }
 
-        const procName = ['bls', 'als', 'cct'].includes(a.tier) ? `ems-${a.tier}` : a.tier;
+        const isIft = ['bls', 'als', 'cct'].includes(a.tier);
+        const procName = isIft ? `ems-${a.tier}` : a.tier;
         if (!this.registry.has(procName)) return no(`no supply process for tier ${a.tier}`);
-        const proc = this.registry.get(procName);
-        const id = proc.request({ ...need, tier: a.tier });
 
-        // A direct agency call costs attention but gets a faster, honest answer.
-        if (a.direct) this.registry.attention.chargeTaskSwitch('unit-clerk', 'direct-agency-call', p.id, 0.5);
+        let id: string;
+        if (isIft && !a.direct) {
+          // The broker: an extra layer of indirection over the agencies. Slower
+          // to answer than working the phone yourself, but it costs no attention.
+          const r = this.registry.broker.request({ ...need, tier: a.tier });
+          if (!r.id) return no(r.reason ?? 'broker declined');
+          id = r.id;
+        } else {
+          const proc = this.registry.get(procName);
+          id = proc.request({ ...need, tier: a.tier });
+          // A direct agency call bypasses broker latency and gets a faster,
+          // more honest answer — at the cost of a clerk working the phone.
+          if (a.direct) this.registry.attention.chargeTaskSwitch('unit-clerk', 'direct-agency-call', p.id, 0.5);
+        }
+
+        // Wrong address: a linkage error, not a supply failure. The car goes
+        // somewhere else and the agent only finds out by noticing it never came.
+        if (!isIft && this.rng.bool(this.registry.broker.wrongAddressProbability())) {
+          p.flags.add('transport-wrong-address');
+          this.ev('note', 'transport dispatched to the wrong address (linkage error)', {}, { patient: p.id, level: 'warn' });
+        }
 
         this.transportRequests.set(p.id, { tier: a.tier, id });
         this.tally.transportCostUnits += TIER_COST[a.tier];
         const depth = DISCHARGE_LADDER.indexOf(a.tier);
         if (depth >= 0) this.ladderAttempts.set(p.id, depth + 1);
-        this.ev('supply.request', `${a.tier} dispatched`, { tier: a.tier, direct: a.direct }, { patient: p.id });
-        return ok({ request: id, state: proc.poll(id) });
+        this.ev(
+          'supply.request',
+          `${a.tier} dispatched${isIft ? (a.direct ? ' (direct call)' : ' (via broker)') : ''}`,
+          { tier: a.tier, direct: a.direct },
+          { patient: p.id },
+        );
+        return ok({ request: id, state: this.registry.get(procName).poll(id) });
       }
 
       case 'cancel_transport': {
@@ -1295,7 +1380,24 @@ export class ErEnv {
       if (p.disposition.kind === 'transfer-out') {
         const t = this.transportRequests.get(p.id);
         if (!t) continue;
-        const st = this.registry.get(`ems-${t.tier}`).poll(t.id);
+        const proc = this.registry.get(`ems-${t.tier}`);
+
+        // Level-of-care upgrade en route: a BLS transport that becomes ALS
+        // mid-route. The agent finds out late and has to re-plan.
+        if (proc instanceof EmsAgency) {
+          const up = proc.maybeUpgrade(t.id);
+          if (up?.upgraded && !p.flags.has('transport-upgraded')) {
+            p.flags.add('transport-upgraded');
+            this.ev(
+              'note',
+              `transport upgraded ${t.tier} -> ${up.newTier} en route`,
+              { from: t.tier, to: up.newTier },
+              { patient: p.id, level: 'warn' },
+            );
+          }
+        }
+
+        const st = proc.poll(t.id);
         if (st.status === 'arrived') this.depart(p);
         continue;
       }
@@ -1585,8 +1687,11 @@ export class ErEnv {
     for (const missed of this.registry.attention.missedHardDeadlines) {
       const already = this.safetyEvents.some((e) => e.detail.includes(missed.id));
       if (already) continue;
+      // Label the floor by what actually failed. Mapping every missed mandatory
+      // interrupt to 'phi-leak' was wrong: a blown reporting clock discloses
+      // nothing, and it made a do-nothing policy look like it leaked records.
       const kind: SafetyViolation =
-        missed.source === 'critical-callback' ? 'missed-critical-callback' : 'phi-leak';
+        missed.source === 'critical-callback' ? 'missed-critical-callback' : 'mandatory-reporting-missed';
       this.recordSafety(kind, missed.patient, `${missed.consequenceIfMissed} [${missed.id}]`);
     }
 

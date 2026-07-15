@@ -92,11 +92,6 @@ export class ArrivalProcess {
     });
   }
 
-  /** Acknowledge a pre-alert. Frees the radio; does not stage anything. */
-  acknowledgePreAlert(id: string): boolean {
-    return this.preAlerts.has(id);
-  }
-
   private tick(): void {
     this.engine.schedule(5, 'arrivals:tick', () => {
       const s = this.ambient.stress;

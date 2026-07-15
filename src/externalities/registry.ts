@@ -175,23 +175,6 @@ export class ExternalityRegistry {
       holdMinutes: 20,
     }));
 
-    reg('blood-products', new StochasticSupply(engine, rng.fork('blood'), this.ambient, {
-      name: 'blood-products',
-      capacity: 20,
-      baseAvailability: 0.9,
-      availabilityAtMaxStress: 0.45,
-      baseEta: 15,
-      etaAtMaxStress: 2.2,
-      etaSpread: 1.5,
-      declineAtZeroStress: 0,
-      declineAtMaxStress: 0.15,
-      noShowAtZeroStress: 0,
-      noShowAtMaxStress: 0.02,
-      etaRevisionProbability: 0.15,
-      cancelGraceMinutes: 10,
-      cancelCost: 2,
-      holdMinutes: 30,
-    }));
 
     // --- OR: exogenous in Module 1; real simulation in Module 4, same iface ---
     reg('or-room', new StochasticSupply(engine, rng.fork('or'), this.ambient, {

@@ -25,7 +25,8 @@
     "demo": "tsx examples/random-policy.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "watch": "tsx examples/random-policy.ts ed-baseline demo-seed --watch",
-    "logs": "tsx examples/random-policy.ts ed-baseline demo-seed --log"
+    "logs": "tsx examples/random-policy.ts ed-baseline demo-seed --log",
+    "bench": "tsx examples/bench.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.4",

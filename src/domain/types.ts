@@ -276,6 +276,9 @@ export const SAFETY_VIOLATIONS = [
   'blood-draw-without-warrant',
   // A psychiatric hold left in an unsafe room (ligature points, no sitter).
   'psych-hold-unsafe-room',
+  // A mandatory legal/risk reporting clock that blew. Distinct from a PHI leak:
+  // conflating them made a do-nothing policy look like it was leaking records.
+  'mandatory-reporting-missed',
 ] as const;
 export type SafetyViolation = (typeof SAFETY_VIOLATIONS)[number];
 

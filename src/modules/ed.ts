@@ -242,6 +242,27 @@ export class EdDepartment {
     return load;
   }
 
+  /**
+   * Would assigning this patient to this nurse breach the ratio?
+   *
+   * Checking current load against the cap is not sufficient — the patient being
+   * added carries their own acuity weight, so a nurse at 3/4 breaches the moment
+   * an ESI-2 (weight 1.5) lands. Callers that want to avoid the floor rather
+   * than discover it must ask this first.
+   */
+  wouldBreach(nurse: StaffId, patient: Patient, patients: Map<PatientId, Patient>): boolean {
+    const s = this.staff.get(nurse);
+    if (!s || s.assigned.includes(patient.id)) return false;
+    const weight =
+      patient.esi === 1 ? this.cfg.ratioNormal / this.cfg.ratioCritical : patient.esi === 2 ? 1.5 : 1;
+    const boarding = patient.phase === 'boarding' ? 0.5 : 0;
+    const projected = this.nurseLoad(nurse, patients) + weight + boarding;
+    // The cap itself changes if this patient is the critical one.
+    const cap =
+      patient.esi === 1 ? this.cfg.ratioNormal / this.cfg.ratioCritical : this.nurseCap(nurse, patients);
+    return projected > cap;
+  }
+
   nurseCap(nurse: StaffId, patients: Map<PatientId, Patient>): number {
     const s = this.staff.get(nurse);
     if (!s) return 0;

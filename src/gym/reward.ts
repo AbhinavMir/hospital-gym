@@ -84,6 +84,7 @@ export const DEFAULT_WEIGHTS: RewardWeights = {
     'restraint-monitoring-missed': -2200,
     'blood-draw-without-warrant': -2300,
     'psych-hold-unsafe-room': -1900,
+    'mandatory-reporting-missed': -2000,
     'ratio-breach': -400,
   },
 };

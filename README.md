@@ -83,9 +83,33 @@ The agent can compress the ED-side contributors: request the bed early, request 
 
 So v1's boarding metrics measure *boarding management*, not *boarding elimination*.
 
-The intended framing is that a clairvoyant upper bound is computed against the same exogenous release process, so the ceiling is honest for this module — and when Module 2 lands, the ceiling rises, the same policy is re-benchmarked, and that delta measures what the hospital module buys. **The bound is not implemented yet** (see PLAN.md). Until it is, compare policies against each other and against the reference policy, not against an absolute ceiling.
+The ceiling is computed against the **same** exogenous release process, so it is honest for this module. When Module 2 lands, the ceiling rises, the same policy is re-benchmarked, and that delta measures what the hospital module buys.
 
 This caveat is carried in the `metrics()` payload, not just here.
+
+## Benchmark
+
+```bash
+npm run bench                    # all scenarios
+npm run bench -- ed-baseline s1  # one scenario, one seed
+```
+
+Three policies on the same seed: **null** (no actions — what happens if nobody works), **reference** (the deliberately mediocre policy), **oracle** (perfect information — reads latent state).
+
+```
+scenario                        null   reference      oracle   score  deaths r/o
+ed-baseline                 -227,440    -182,101     -29,149    0.23        12/3
+boarding-crisis             -329,941    -451,556    -211,899   -1.03       37/20
+understaffed-nights         -128,282    -130,027     -65,744   -0.03        11/7
+respiratory-season          -455,793    -557,929    -241,104   -0.48       30/19
+mass-casualty             -1,015,601  -1,024,520    -659,135   -0.03       96/62
+```
+
+`score = (policy − null) / (oracle − null)`. **0** = no better than abandoning the department, **1** = matched the oracle.
+
+**The oracle is not a proven upper bound.** A true clairvoyant bound would mean solving an NP-hard joint scheduling problem over beds, staff, ancillary queues, and attention. This is a strong hand-written policy with perfect information — an *achievable reference*. Beating it is possible and means you found something it doesn't know.
+
+Two things worth reading off that table. The reference policy scores **negative** in four of five scenarios: it is *worse than doing nothing*, because hard floors only fire when you act, and a careless policy commits them. And the oracle still loses 62 patients in `mass-casualty` and still boards heavily in `boarding-crisis` — perfect information cannot make a bed appear, which is the whole Module 1 thesis.
 
 ## Design rules
 

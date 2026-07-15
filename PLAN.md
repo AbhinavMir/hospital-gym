@@ -27,7 +27,7 @@ interfaces without rewriting the ED.
    at once. S is not observable — only noisy proxies.
 6. **Attention is finite.** Interrupts occupy role-servers. Claimed ≠ true priority.
 
-## Status: Module 1 + dashboard + logging + behavioural/LE pathways. 55/55 tests pass.
+## Status: Module 1 complete + oracle ceiling. 61/61 tests pass. All 5 gaps from iteration 3 closed.
 Pushed: github.com/AbhinavMir/hospital-gym (public, main).
 
 Calibration sanity (seed-dependent, `ed-baseline`):
@@ -111,22 +111,45 @@ Calibration sanity (seed-dependent, `ed-baseline`):
 - **Law enforcement.** `police_blood_draw` refused + floored without warrant/consent.
 - 3 new floors priced with the identity tier; new `metrics().behavioural` block.
 
+### Iteration 4 (loop) — closed every remaining gap
+- **Oracle reference ceiling** (`src/gym/oracle.ts`, `npm run bench`). Reads latent state —
+  legitimate ONLY for computing a ceiling. Named `oracleReference`, NOT a proven upper bound
+  (a true clairvoyant bound is NP-hard); README says so explicitly.
+  Building it found four bugs, three of them mine:
+  1. Missed mandatory legal interrupts were labelled `phi-leak` — so a DO-NOTHING policy
+     appeared to leak PHI 11 times. Added `mandatory-reporting-missed`.
+  2. Oracle committed 32 controlled-substance discrepancies (ordered analgesia, never
+     documented) and 30 ratio breaches.
+  3. Oracle earned under-triage floors: it triaged on `trueEsi`, but a trueEsi-3 patient at
+     high severity has danger-zone vitals and IS a 2. The danger zone overrides the label.
+  4. Batch-collision: the oracle built its whole action list against one snapshot, so two
+     patients picked the same "least-loaded" nurse and the second breached. Added
+     `EdDepartment.wouldBreach` + within-batch provisional tallies.
+  Oracle went -143k -> -29k on baseline and now commits ZERO avoidable floors.
+- **Re-triage** (`retriage` action). Danger-zone floor now applies after the door, so a
+  patient who decompensates in the waiting room can be caught.
+- **AMA** disposition now reachable; raises a reportable event; a psych hold cannot use it.
+- **Dead code cleared.** Deleted: `acknowledgePreAlert`, `reassessmentOf`, `transportOf`,
+  the redundant `blood-products` supply (BloodBank is the real model).
+  Wired: `TransportBroker` (broker vs direct-call trade), `maybeUpgrade` (BLS->ALS en route),
+  `wrongAddressProbability`, `stopMtp` (new `stop_mtp` action).
+- Headline finding: the reference policy scores NEGATIVE in 4/5 scenarios — worse than doing
+  nothing, because floors only fire when you act. That is the floors working.
+
 ### Known gaps / next
 - `metrics().supply.byProcess` is a stub `{}` — needs per-process request/fill/no-show/decline
   counters threaded out of `StochasticSupply`. Same for `fallbackLadderDepthMean`,
   `anticipation.meanStressAtBedRequest`, `capacity.evsTurnaroundP50`.
 - `capacity.diversionHours` is derived from the reward component; should read the tally directly.
-- No clairvoyant upper bound implemented yet. README claim SOFTENED to say so explicitly.
-  Build it next: replay the same seed's release process with a perfect-information policy.
+- Oracle is a strong policy, not a proven bound. Fine, and labelled as such — but atrue bound
+  would need an LP/MILP relaxation. Open research question, not a defect.
 - Parameters are plausible, not fitted. Stated honestly in the README's Status section.
-- Dead code still unwired: `EmsAgency.maybeUpgrade` (BLS→ALS en route), `directCall`,
-  `wrongAddressProbability`, `TransportBroker` (registry builds it, env never uses it),
-  `blood-products` supply (BloodBank is a separate class), `stopMtp`/`isMtpActive`,
-  `acknowledgePreAlert`. Either wire or delete — leaving them is a lie about coverage.
-- No AMA action (`Disposition` has the `ama` kind but nothing produces it).
-- No re-triage: danger-zone check only fires at initial triage. A patient who decompensates
-  in the waiting room is never re-triaged, so the under-triage floor cannot catch it.
-- Viz does not show restraints/psych holds.
+- Viz does not show restraints/psych holds/sitters.
+- `directCall` on EmsAgency still unused (env calls the agency directly instead); harmless
+  duplication, but pick one.
+- Oracle residual: 3-4 `wrong-patient-identity` under saturated attention. Believed
+  unavoidable (task-switch during med prep), but unverified — could be a floor that is too
+  aggressive rather than an honest hazard.
 - ~~IT downtime does not actually degrade the read surface~~ FIXED. Full outage freezes the
   order board + empties capacity feeds; partial inflates staleness; silent outages never set
   `itDowntime`. Freeze is event-driven at the window boundary (NOT lazy on first observe —

@@ -39,6 +39,11 @@ export const ActionSchema = z.discriminatedUnion('type', [
     isolation: z.enum(['none', 'contact', 'droplet', 'airborne']).optional(),
   }),
   z.object({
+    type: z.literal('retriage'),
+    patient: z.string(),
+    esi,
+  }).describe('re-triage a patient whose condition changed; the danger-zone floor still applies'),
+  z.object({
     type: z.literal('route'),
     patient: z.string(),
     destination: z.enum(['main', 'fast-track', 'vertical', 'waiting']),
@@ -113,6 +118,11 @@ export const ActionSchema = z.discriminatedUnion('type', [
     units: z.number().int().min(1).max(10),
   }),
   z.object({ type: z.literal('warm_blood_bank'), patient: z.string() }),
+  z.object({
+    type: z.literal('stop_mtp'),
+    patient: z.string(),
+    /** An MTP left running drains a bank that someone else will need. */
+  }),
 
   // --- EMS / trauma anticipation ---
   z.object({
@@ -159,7 +169,7 @@ export const ActionSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('decide_disposition'),
     patient: z.string(),
-    disposition: z.enum(['discharge', 'admit', 'transfer-out', 'or']),
+    disposition: z.enum(['discharge', 'admit', 'transfer-out', 'or', 'ama']),
     level: careLevel.optional().describe('required when disposition is admit'),
   }),
 
@@ -243,6 +253,7 @@ const ALWAYS_AVAILABLE: ActionType[] = [
   'register',
   'mpi_resolve',
   'triage',
+  'retriage',
   'route',
   'standing_orders',
   'set_reassessment',
@@ -264,6 +275,7 @@ const ALWAYS_AVAILABLE: ActionType[] = [
   'document_controlled',
   'request_blood',
   'warm_blood_bank',
+  'stop_mtp',
   'activate_trauma',
   'prestage',
   'answer_interrupt',
