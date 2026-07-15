@@ -53,18 +53,23 @@ function state(h: SessionHandle) {
   const env = h.env;
   const obs = env.observe();
   const live = [...env.patients.values()].filter((p) => p.phase !== 'departed');
+  const m = env.metrics();
   return {
     sessionId: h.id,
     player: h.model,
     scenario: env.scenario.name,
     step: h.step,
     clock: obs.clock,
+    totalSteps: Math.ceil(env.scenario.durationMinutes / env.scenario.tickMinutes),
     done: env.now >= env.scenario.durationMinutes,
-    reward: Math.round(env.components.total),
-    census: live.length,
-    waiting: live.filter((p) => p.phase.startsWith('waiting')).length,
+    // Counts a charge nurse actually tracks — not a running score (which is a
+    // big negative number and just demoralising mid-shift).
+    inDept: live.length,
+    needTriage: live.filter((p) => p.esi === null).length,
+    needBed: live.filter((p) => p.phase === 'waiting-room').length,
     boarding: live.filter((p) => p.phase === 'boarding').length,
-    stressProxy: obs.stressProxy,
+    deaths: m.clinical.deaths,
+    leftWithoutCare: [...env.patients.values()].filter((p) => p.disposition?.kind === 'lwbs').length,
     onDiversion: obs.onDiversion,
     beds: obs.ed.beds,
     patients: obs.patients,
@@ -115,6 +120,15 @@ const server = createServer(async (req, res) => {
       const b = await body(req);
       const h = store.open(b.player || 'nurse', getScenario(b.scenario || 'ed-baseline'), b.seed || 's1');
       queued.set(h.id, []);
+      // Skip the quiet opening: advance (recording the empty windows honestly)
+      // until the first patient actually arrives, so the nurse starts with
+      // someone to work on instead of a blank board. No decisions were possible
+      // in that window anyway, so it does not affect the comparison.
+      for (let i = 0; i < 40 && [...h.env.patients.values()].every((p) => p.phase === 'departed'); i++) {
+        const r = h.env.step([]);
+        store.recordStep(h, [], r.results, r.reward, r.components.total, r.info.time, r.info.clock, r.info.newSafetyEvents);
+        if ([...h.env.patients.values()].some((p) => p.phase !== 'departed')) break;
+      }
       return send(200, state(h));
     }
 

@@ -49,7 +49,7 @@ The board renders the *observation*, not the world — it shows exactly what the
 npm run play          # then open http://127.0.0.1:7788
 ```
 
-Turn-based, point-and-click. You are the charge nurse: click a patient, click the actions that are legal for them right now, queue them for the window, advance 5 minutes. At the end you get a normalized score against the same null/oracle anchors an AI is measured on, and the run is saved to `runs/<player>_<id>.sqlite` — the **identical record** an AI run writes. So human, AI, and oracle land on one comparable scale.
+Turn-based, point-and-click. You are the charge nurse: click a patient, click the actions that are legal for them right now, queue them for the window, advance 5 minutes. At the end you get a normalized score against the same null/oracle anchors an AI is measured on, and the run is saved to `runs/<player>_<id>.jsonl` — the **identical record** an AI run writes. So human, AI, and oracle land on one comparable scale.
 
 The action menus unfold in clinical order — *Assess → Triage → Place in bed → Assign staff → Orders + Disposition → move the patient* — so the workflow is discoverable rather than something you must know in advance.
 
@@ -106,7 +106,7 @@ console.log(env.metrics());
 
 Tools: `er_scenarios`, `er_reset`, `er_observe`, `er_step`, `er_action_space`, `er_formulary`, `er_metrics`, `er_sessions`.
 
-**Each model gets its own run.** `er_reset` is a handshake: pass your model name and it provisions a fresh episode plus a durable SQLite record at `runs/<model>_<rand>.sqlite`, returning a `sessionId`. Thread that id through `er_observe`/`er_step`/`er_metrics` and concurrent models never corrupt each other. The `.sqlite` holds the whole run — handshake metadata, every step's actions and reward, safety events, and the final scorecard — so a run is auditable and comparable after the fact. (Omit the id for a single serial run; it resolves to the most recent.)
+**Each model gets its own run.** `er_reset` is a handshake: pass your model name and it provisions a fresh episode plus a durable run record at `runs/<model>_<rand>.jsonl`, returning a `sessionId`. Thread that id through `er_observe`/`er_step`/`er_metrics` and concurrent models never corrupt each other. The `.jsonl` holds the whole run — handshake metadata, every step's actions and reward, safety events, and the final scorecard — so a run is auditable and comparable after the fact. (JSONL, not a native SQLite module, so it runs on any Node with zero compile step; `scripts/runs-to-sqlite.sh` loads them into SQLite if you want SQL.) (Omit the id for a single serial run; it resolves to the most recent.)
 
 ## The honest limitation, stated up front
 

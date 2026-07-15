@@ -1,5 +1,4 @@
-import Database from 'better-sqlite3';
-import { mkdirSync } from 'node:fs';
+import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ErEnv } from '../gym/env.js';
 import type { ScenarioSpec } from '../scenarios/types.js';
@@ -7,67 +6,38 @@ import type { ScenarioSpec } from '../scenarios/types.js';
 /**
  * Session store + durable run record.
  *
- * Each model that connects gets its OWN env and its OWN SQLite file. That kills
- * the single-global-env problem — two models benchmarking at once can no longer
- * corrupt each other's shift — and it leaves a durable, queryable record of
- * every run on disk.
+ * Each model or human that connects gets its OWN env and its OWN run-record
+ * file. That kills the single-global-env problem — two players benchmarking at
+ * once can no longer corrupt each other's shift — and leaves a durable,
+ * greppable record of every run on disk.
  *
- * The SQLite file is the RUN RECORD, not the live simulation. The env is an
- * in-memory discrete-event object running thousands of events per shift; the DB
- * captures what happened (handshake, per-step actions and reward, safety
- * events, final metrics) so a run can be compared and audited after the fact.
- * The sim's live state never round-trips through SQLite — that would be slow
- * and would buy nothing.
+ * The record is JSONL, NOT SQLite. An earlier version used better-sqlite3; it is
+ * a native addon that breaks the instant the runtime's Node version differs from
+ * the one it was compiled against, and it did exactly that — crashing the play
+ * UI to a blank screen. A benchmark meant to be run by other people cannot carry
+ * a dependency that shatters on a Node mismatch. JSONL needs no native code,
+ * runs on any Node, and imports into SQLite/pandas/DuckDB in one line for anyone
+ * who wants to query it (see scripts/runs-to-sqlite.sh).
+ *
+ * One file per run: `runs/<player>_<rand>.jsonl`, one event per line:
+ *   {"kind":"run",    ...}   header: player, scenario, seed, timing
+ *   {"kind":"step",   ...}   per step: actions, results, reward, cumulative
+ *   {"kind":"safety", ...}   one line per safety-floor violation
+ *   {"kind":"result", ...}   final scorecard (reward breakdown + metrics)
+ * plus a `<player>_<rand>.summary.json` written on finalize.
+ *
+ * The live simulation stays in memory — it runs thousands of events per shift,
+ * so nothing round-trips through the file except what actually happened.
  */
 
 export interface SessionHandle {
   id: string;
   model: string;
-  dbPath: string;
+  dbPath: string; // the .jsonl run record; named dbPath for API stability
   env: ErEnv;
-  db: Database.Database;
   step: number;
   finalized: boolean;
 }
-
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS run (
-  session_id   TEXT PRIMARY KEY,
-  model        TEXT NOT NULL,
-  scenario     TEXT NOT NULL,
-  seed         TEXT NOT NULL,
-  started_at   TEXT NOT NULL,
-  duration_min INTEGER,
-  tick_min     INTEGER,
-  finalized    INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS step (
-  session_id   TEXT NOT NULL,
-  step         INTEGER NOT NULL,
-  sim_minute   REAL NOT NULL,
-  clock        TEXT NOT NULL,
-  actions      TEXT NOT NULL,   -- JSON array the model submitted
-  results      TEXT NOT NULL,   -- JSON array of per-action outcomes
-  reward       REAL NOT NULL,   -- reward for this step
-  cumulative   REAL NOT NULL,   -- cumulative total reward
-  PRIMARY KEY (session_id, step)
-);
-CREATE TABLE IF NOT EXISTS safety (
-  session_id TEXT NOT NULL,
-  step       INTEGER NOT NULL,
-  sim_minute REAL NOT NULL,
-  kind       TEXT NOT NULL,
-  patient    TEXT,
-  detail     TEXT
-);
-CREATE TABLE IF NOT EXISTS result (
-  session_id TEXT PRIMARY KEY,
-  ended_at   TEXT NOT NULL,
-  reward     REAL NOT NULL,
-  components TEXT NOT NULL,     -- JSON reward breakdown
-  metrics    TEXT NOT NULL      -- JSON full scorecard
-);
-`;
 
 export class SessionStore {
   private sessions = new Map<string, SessionHandle>();
@@ -75,34 +45,38 @@ export class SessionStore {
 
   constructor(
     private readonly dir: string,
-    /** Deterministic id suffix source — the env owns real randomness, not us. */
+    /** Deterministic id-suffix source; never touches the simulation's RNG. */
     private readonly rand: () => number,
   ) {
     mkdirSync(dir, { recursive: true });
   }
 
   /**
-   * The handshake. A model announces its name; we provision a fresh env and a
-   * fresh `<model>_<rand>.sqlite`, and return the session id the model threads
-   * through every later call.
+   * The handshake. A player announces its name; we provision a fresh env and a
+   * fresh `<name>_<rand>.jsonl`, and return the session id threaded through
+   * every later call.
    */
   open(model: string, scenario: ScenarioSpec, seed: number | string): SessionHandle {
-    const safeModel = model.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 64) || 'model';
-    const suffix = Math.floor(this.rand() * 1e9);
-    const id = `${safeModel}_${suffix}`;
-    const dbPath = join(this.dir, `${id}.sqlite`);
+    const safe = model.replace(/[^a-zA-Z0-9._-]/g, '-').slice(0, 64) || 'player';
+    const id = `${safe}_${Math.floor(this.rand() * 1e9)}`;
+    const path = join(this.dir, `${id}.jsonl`);
 
-    const db = new Database(dbPath);
-    db.pragma('journal_mode = WAL');
-    db.exec(SCHEMA);
+    writeFileSync(
+      path,
+      JSON.stringify({
+        kind: 'run',
+        session: id,
+        player: model,
+        scenario: scenario.name,
+        seed: String(seed),
+        startedAt: nowIso(),
+        durationMinutes: scenario.durationMinutes,
+        tickMinutes: scenario.tickMinutes,
+      }) + '\n',
+    );
 
     const env = new ErEnv(scenario, seed);
-    db.prepare(
-      `INSERT INTO run (session_id, model, scenario, seed, started_at, duration_min, tick_min)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, model, scenario.name, String(seed), nowIso(), scenario.durationMinutes, scenario.tickMinutes);
-
-    const handle: SessionHandle = { id, model, dbPath, env, db, step: 0, finalized: false };
+    const handle: SessionHandle = { id, model, dbPath: path, env, step: 0, finalized: false };
     this.sessions.set(id, handle);
     this.lastId = id;
     return handle;
@@ -115,7 +89,7 @@ export class SessionStore {
     return key ? this.sessions.get(key) ?? null : null;
   }
 
-  /** Record one step into the run's DB. */
+  /** Append one step (and any safety events it produced) to the record. */
   recordStep(
     h: SessionHandle,
     actions: unknown[],
@@ -127,42 +101,36 @@ export class SessionStore {
     newSafety: { kind: string; at: number; patient: string | null; detail: string }[],
   ): void {
     h.step += 1;
-    h.db
-      .prepare(
-        `INSERT INTO step (session_id, step, sim_minute, clock, actions, results, reward, cumulative)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(h.id, h.step, simMinute, clock, JSON.stringify(actions), JSON.stringify(results), reward, cumulative);
-
-    if (newSafety.length) {
-      const ins = h.db.prepare(
-        `INSERT INTO safety (session_id, step, sim_minute, kind, patient, detail) VALUES (?, ?, ?, ?, ?, ?)`,
-      );
-      const tx = h.db.transaction((rows: typeof newSafety) => {
-        for (const s of rows) ins.run(h.id, h.step, s.at, s.kind, s.patient, s.detail);
-      });
-      tx(newSafety);
+    const lines = [
+      JSON.stringify({ kind: 'step', session: h.id, step: h.step, simMinute, clock, reward, cumulative, actions, results }),
+    ];
+    for (const s of newSafety) {
+      lines.push(JSON.stringify({ kind: 'safety', session: h.id, step: h.step, simMinute: s.at, violation: s.kind, patient: s.patient, detail: s.detail }));
     }
+    appendFileSync(h.dbPath, lines.join('\n') + '\n');
   }
 
-  /** Write the final scorecard and mark the run complete. Idempotent. */
+  /** Write the final scorecard line + a summary.json, and mark complete. Idempotent. */
   finalize(h: SessionHandle): void {
     if (h.finalized) return;
     const components = h.env.components;
     const metrics = h.env.metrics();
-    h.db
-      .prepare(`INSERT OR REPLACE INTO result (session_id, ended_at, reward, components, metrics) VALUES (?, ?, ?, ?, ?)`)
-      .run(h.id, nowIso(), components.total, JSON.stringify(components), JSON.stringify(metrics));
-    h.db.prepare(`UPDATE run SET finalized = 1, duration_min = ? WHERE session_id = ?`).run(h.env.now, h.id);
+    appendFileSync(
+      h.dbPath,
+      JSON.stringify({ kind: 'result', session: h.id, endedAt: nowIso(), reward: components.total, components, metrics }) + '\n',
+    );
+    writeFileSync(
+      h.dbPath.replace(/\.jsonl$/, '.summary.json'),
+      JSON.stringify({ session: h.id, player: h.model, scenario: h.env.scenario.name, seed: String(h.env.seed), reward: components.total, components, metrics }, null, 2),
+    );
     h.finalized = true;
   }
 
-  /** Close a session's DB and drop it from memory. */
+  /** Finalize and drop a session from memory. */
   close(id: string): void {
     const h = this.sessions.get(id);
     if (!h) return;
     this.finalize(h);
-    h.db.close();
     this.sessions.delete(id);
     if (this.lastId === id) this.lastId = null;
   }
@@ -183,7 +151,6 @@ export class SessionStore {
 }
 
 function nowIso(): string {
-  // The sim is deterministic; wall-clock timestamps are metadata only and never
-  // feed the simulation, so using the real clock here is safe.
+  // Wall-clock metadata only; never feeds the deterministic simulation.
   return new Date().toISOString();
 }
