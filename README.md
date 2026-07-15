@@ -43,6 +43,23 @@ Open <http://127.0.0.1:7777>. It shows the bed grid, the patient board (sickest 
 
 The board renders the *observation*, not the world — it shows exactly what the agent can see and no more. A test enforces this: if latent state ever leaked into a frame, the dashboard is exactly where it would go unnoticed.
 
+## Drive it with an LLM
+
+A single-file reference client, `examples/llm-policy.ts`, plays a shift with any model through OpenRouter — swapping models is one argument:
+
+```bash
+npm run llm -- --dry-run --max-steps 20                              # free: local stub, no key, no network
+npm run llm -- --model anthropic/claude-sonnet-4 --key sk-or-...     # a real model
+npm run llm -- --model openai/gpt-5 --key sk-or-...
+npm run llm -- --model google/gemini-2.5-pro --key sk-or-...
+```
+
+It never reads a key from your environment on its own: pass `--key`, or set `OPENROUTER_API_KEY` and add `--use-env`. With neither, only `--dry-run` runs.
+
+The loop is: compact the observation → prompt the model → parse a JSON action batch → `step`. Malformed or hallucinated actions are dropped with a reason and never reach the env; refused actions are fed back to the model next turn. This file talks to the env directly for simplicity — the three model-facing functions (`buildMessages`, `callOpenRouter`, `parseActions`) are transport-agnostic, so a separate MCP-based harness keeps them verbatim and swaps `env.observe()`/`env.step()` for the `er_observe`/`er_step` tool calls.
+
+**No model has been run through this yet** — it needs a key, which is yours to supply.
+
 ## Use as a library
 
 ```ts

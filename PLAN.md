@@ -42,7 +42,8 @@ interfaces without rewriting the ED.
 `npm run bench` benchmarks three HARDCODED policies (null/reference/oracle). The MCP server
 works and is stdio-verified, but no model has driven an episode. The entire premise — that this
 measures AI scheduling ability — is UNTESTED. Everything else is scaffolding until that runs.
-Next: an LLM policy adapter (Anthropic API loop or MCP client) + a scored multi-seed run.
+LLM adapter DONE (examples/llm-policy.ts, OpenRouter, model = one arg). Not yet RUN — needs a key.
+Next: point it at real models across seeds and see whether the scenarios discriminate.
 Loop scope from the user ("fix everything end to end, extend to a complete ER, log everything")
 is DONE. Remaining items below are refinements, not gaps.
 Pushed: github.com/AbhinavMir/hospital-gym (public, main).
