@@ -53,9 +53,10 @@ Turn-based, point-and-click. You are the charge nurse: click a patient, click th
 
 The action menus unfold in clinical order — *Assess → Triage → Place in bed → Assign staff → Orders + Disposition → move the patient* — so the workflow is discoverable rather than something you must know in advance.
 
-### Fair human-vs-AI comparison
+### Same information for human and AI
 
-The click menu shows only the moves that are legal for a patient now. To keep the comparison honest, the LLM adapter is handed that **same** legal-action list each turn (`--show-legal`, on by default; `--no-legal` for the raw-tool-call condition). Both agents then know the same set of legal moves — the only remaining difference is input modality (click vs. JSON), which is an acknowledged limitation, not an information gap. Running the AI in both conditions isolates interface friction from reasoning.
+The click menu shows only the moves that are legal for a patient now. The AI is handed that **same** legal-move list every turn, so neither has a legality-information advantage — the only difference is input modality (click vs. JSON).
+
 
 ## Drive it with an LLM
 

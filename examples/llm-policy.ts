@@ -62,7 +62,6 @@ interface Cfg {
   maxSteps: number;
   temperature: number;
   log: boolean;
-  showLegal: boolean;
 }
 
 function parseArgs(argv: string[]): Cfg {
@@ -86,10 +85,6 @@ function parseArgs(argv: string[]): Cfg {
     maxSteps: Number(get('--max-steps', '0')), // 0 = full shift
     temperature: Number(get('--temperature', '0.2')),
     log: has('--log'),
-    // --show-legal is the PARITY condition: hand the model the same
-    // per-patient legal-action list the human UI surfaces as buttons. On by
-    // default with --no-legal to turn it off (the raw-tool-call condition).
-    showLegal: !has('--no-legal'),
   };
 }
 
@@ -222,14 +217,16 @@ function legalSummary(env: ErEnv): string {
 }
 
 /** Build the message list for one step. */
-function buildMessages(env: ErEnv, o: Observation, lastResults: ActionResult[], showLegal: boolean): { role: string; content: string }[] {
+function buildMessages(env: ErEnv, o: Observation, lastResults: ActionResult[]): { role: string; content: string }[] {
   const refused = lastResults.filter((r) => !r.ok);
   const feedback =
     refused.length > 0
       ? `\nLast step, these actions were REFUSED — adapt:\n` +
         refused.map((r) => `- ${r.action}: ${r.reason}`).join('\n')
       : '';
-  const legal = showLegal ? `\n\n${legalSummary(env)}` : '';
+  // The model always gets the same legal-move list the human UI shows, so
+  // neither has a legality-information advantage.
+  const legal = `\n\n${legalSummary(env)}`;
   return [
     { role: 'system', content: `${systemPrompt()}\n\n${actionReference()}` },
     {
@@ -365,7 +362,7 @@ async function main() {
   while (!done) {
     let reply: string;
     try {
-      reply = cfg.dryRun ? stubReply(obs) : await callModel(cfg, buildMessages(env, obs, lastResults, cfg.showLegal));
+      reply = cfg.dryRun ? stubReply(obs) : await callModel(cfg, buildMessages(env, obs, lastResults));
     } catch (e) {
       console.error(`step ${step}: model call failed — ${(e as Error).message}`);
       console.error('stopping. partial metrics below.');
