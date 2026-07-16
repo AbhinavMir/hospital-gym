@@ -247,18 +247,30 @@ async function callModel(cfg: Cfg, messages: { role: string; content: string }[]
       'HTTP-Referer': 'https://github.com/AbhinavMir/hospital-gym',
       'X-Title': 'er-gym',
     },
-    body: JSON.stringify({
-      model: cfg.model,
-      messages,
-      temperature: cfg.temperature,
-      max_tokens: 2000,
-    }),
+    body: JSON.stringify(requestBody(cfg, messages)),
   });
   if (!res.ok) {
     throw new Error(`${cfg.endpoint} ${res.status}: ${(await res.text()).slice(0, 400)}`);
   }
   const data = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   return data.choices?.[0]?.message?.content ?? '';
+}
+
+/**
+ * The newer OpenAI families (gpt-5*, o1*, o3*, o4*) renamed the token cap to
+ * `max_completion_tokens` and only accept the default temperature. The older
+ * ones (gpt-4o, gpt-4-turbo, gpt-3.5, and everything on OpenRouter) take the
+ * classic `max_tokens` + a temperature. Pick the shape from the model name.
+ */
+function requestBody(cfg: Cfg, messages: { role: string; content: string }[]) {
+  const modern = /(^|\/)(gpt-5|o1|o3|o4)/.test(cfg.model);
+  const base = { model: cfg.model, messages };
+  return modern
+    ? // Reasoning models bill hidden thinking tokens. `low` effort keeps a
+      // 144-step shift affordable and fast while still letting the model plan;
+      // the cap is headroom so a reasoning burst never truncates the answer.
+      { ...base, max_completion_tokens: 5000, reasoning_effort: 'low' }
+    : { ...base, temperature: cfg.temperature, max_tokens: 2000 };
 }
 
 /**
