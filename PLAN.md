@@ -44,11 +44,10 @@ interfaces without rewriting the ED.
   one scale. Final screen shows the normalized score vs null/oracle anchors (computed on finish).
 - `src/gym/legal.ts` — contextual legal actions, ONE source of truth. The human sees them as
   buttons that unfold in clinical order (Assess->Triage->Room->Staff->Orders->Dispo->move);
-  the AI is handed the same list each turn (--show-legal, default on; --no-legal = raw condition).
+  the AI is handed the same list each turn.
   This is the affordance-parity mechanism: both agents know the same legal moves, only input
   modality differs. 6 tests in tests/legal.test.ts.
-- Note for the paper: run AI in both --show-legal and --no-legal to isolate interface friction
-  from reasoning. gpt-4o-mini's failure (never tried place_bed) is exactly what --show-legal
+- Note for the paper: gpt-4o-mini's failure (never tried place_bed) is exactly what --show-legal
   tests — does surfacing "Place in bed" as a legal move fix it, or is it a planning failure.
 
 ### First real model result: gpt-4o-mini, ed-baseline s1
