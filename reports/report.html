@@ -1,0 +1,83 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+  @page{size:letter;margin:22mm 20mm}
+  *{box-sizing:border-box}
+  body{font:12px/1.55 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;color:#111;margin:0}
+  h1{font-size:22px;margin:0 0 2px}
+  h2{font-size:14px;margin:22px 0 8px;padding-bottom:4px;border-bottom:1.5px solid #111}
+  .sub{color:#666;font-size:12px;margin-bottom:2px}
+  .meta{color:#666;font-size:11px}
+  table{width:100%;border-collapse:collapse;margin:8px 0;font-size:12px}
+  th{text-align:left;background:#f2f2f2;padding:6px 8px;border-bottom:1.5px solid #111;font-size:11px}
+  td{padding:6px 8px;border-bottom:1px solid #ddd}
+  td.num{text-align:right;font-variant-numeric:tabular-nums}
+  .score{font-weight:700;font-variant-numeric:tabular-nums}
+  .good{color:#0a7d34}.bad{color:#b3261e}.na{color:#999}
+  .scale{position:relative;height:34px;margin:14px 40px 6px;background:linear-gradient(90deg,#fbe9e7,#fff8e1,#e8f5e9);border:1px solid #ccc;border-radius:5px}
+  .tick{position:absolute;top:0;bottom:0;width:0;border-left:1px dashed #999}
+  .mark{position:absolute;top:-4px;transform:translateX(-50%);text-align:center;font-size:10px}
+  .mark .dot{width:11px;height:11px;border-radius:50%;margin:0 auto 1px;border:2px solid #fff;box-shadow:0 0 0 1px #333}
+  .key{background:#f7f9fc;border:1px solid #d7e0ea;border-left:4px solid #2f6fed;border-radius:5px;padding:11px 14px;margin:10px 0}
+  .bars td{border:none;padding:2px 6px}
+  .bar{height:13px;background:#2f6fed;border-radius:2px;display:inline-block;vertical-align:middle}
+  .barbg{background:#eee;border-radius:2px;display:inline-block;width:180px;vertical-align:middle}
+  ul{margin:6px 0 0 18px;padding:0}li{margin:3px 0}
+  .foot{color:#888;font-size:10px;margin-top:26px;border-top:1px solid #ddd;padding-top:6px}
+  .pill{display:inline-block;padding:1px 7px;border-radius:9px;font-size:10px;font-weight:700;color:#fff}
+</style></head><body>
+
+<h1>er-gym — AI benchmark results</h1>
+<div class="sub">Can a language model run an emergency department shift?</div>
+<div class="meta">Scenario: <b>ed-baseline</b> &middot; seed <b>s1</b> &middot; one 12-hour shift (144 five-minute rounds) &middot; single seed</div>
+
+<h2>The scale</h2>
+<p>Each model plays the same shift and is scored against two fixed reference runs on the identical seed:
+<b>doing nothing</b> (the floor, 0.00) and a <b>perfect-information oracle</b> (the ceiling, 1.00).
+A model at 0.5 closed half the gap between abandoning the department and flawless play.
+<b>Below 0 is worse than doing nothing</b> — possible here because the hard safety penalties only fire when you <i>act</i>.</p>
+
+<div class="scale" id="scale">
+  <div class="tick" style="left:0%"></div>
+  <div class="tick" style="left:66.7%"></div>
+  <div class="tick" style="left:100%"></div>
+  <div class="mark" style="left:0%;transform:translateX(-50%)"><div class="dot" style="background:#999"></div>do nothing<br>0.00</div>
+  <div class="mark" style="left:37.5%"><div class="dot" style="background:#b3261e"></div>gpt-4o-mini<br>&minus;0.18</div>
+  <div class="mark" style="left:66.7%"><div class="dot" style="background:#0a7d34"></div>gpt-5.6<br>0.65</div>
+  <div class="mark" style="left:100%"><div class="dot" style="background:#333"></div>oracle<br>1.00</div>
+</div>
+<div class="meta" style="margin-top:24px">Marks placed on the 0&ndash;1 scale (&minus;0.18 sits left of the "do nothing" line).</div>
+
+<h2>Results</h2>
+<table>
+<tr><th>Model</th><th>Score</th><th class="num">Deaths</th><th class="num">Walked out</th><th class="num">Roomed</th><th class="num">Sent onward</th><th>Verdict</th></tr>
+<tr><td><b>gpt-5.6</b> <span class="meta">(reasoning)</span></td><td class="score good">0.65</td><td class="num">2</td><td class="num">27%</td><td class="num">48</td><td class="num">16</td><td>Runs the department</td></tr>
+<tr><td><b>gpt-4o-mini</b></td><td class="score bad">&minus;0.18</td><td class="num">10</td><td class="num">71%</td><td class="num">0</td><td class="num">0</td><td>Froze &mdash; worse than nothing</td></tr>
+<tr><td><b>gpt-3.5-turbo</b></td><td class="score na">no data</td><td class="num na">&mdash;</td><td class="num na">&mdash;</td><td class="num na">&mdash;</td><td class="num na">&mdash;</td><td class="na">Run not completed (budget)</td></tr>
+</table>
+<div class="meta">"Roomed" = patients placed in a bed so a doctor could see them. "Sent onward" = discharged or admitted out. Both are zero for a model that never advances care.</div>
+
+<h2>What actually happened</h2>
+<div class="key">
+<b>The benchmark discriminates cleanly, and it caught two distinct failure modes.</b>
+<ul>
+<li><b>gpt-5.6</b> played it like a charge nurse: it triaged, put 48 patients in beds, ordered workups, sent 16 onward, and triaged the ringing phones (deferring the noise). Two patients died, 27% left without being seen &mdash; far from perfect, but it genuinely ran the floor.</li>
+<li><b>gpt-4o-mini</b> never formed the plan. It measured vitals <b>~1,300 times</b> and never once put a patient in a bed, assigned a doctor, or ordered a treatment. Patients piled up in the waiting room; 71% walked out, 10 died &mdash; the same outcome as an empty department, but scored slightly worse because it broke a few paperwork rules while achieving nothing.</li>
+</ul>
+</div>
+<p>The gap is not about the interface. gpt-4o-mini was handed the list of legal moves &mdash; including "place patient in a bed" &mdash; on every single round, and still never did it. That rules out "it didn't know it could" and points at a planning ceiling: the small model fixates on the single cheapest legal action and cannot sequence <i>room &rarr; treat &rarr; send onward</i>.</p>
+
+<h2>Reading the safety trade-off</h2>
+<p>gpt-5.6's higher score came partly from working aggressively, and that cost it on safety: it committed <b>30 safety-floor violations</b> (mostly nurse-ratio breaches from overloading staff, plus one medication-verification bypass and one controlled-substance slip). gpt-4o-mini's only violations were missed reporting clocks. In other words, the model that actually treated patients also took on the real risk that comes with acting &mdash; which is exactly the tension the benchmark is built to measure.</p>
+
+<h2>Limits of this run</h2>
+<ul>
+<li><b>Single seed.</b> One shift each. The exact scores carry roughly &plusmn;0.2 of noise; treat 0.65 and &minus;0.18 as "clearly above" and "clearly below" doing nothing, not precise figures. Multiple seeds are needed to quote a number.</li>
+<li><b>gpt-3.5-turbo has no result</b> &mdash; its run was cut off when the API budget ran out. Not reported rather than reported wrong.</li>
+<li><b>Scored with a straightforward prompt.</b> A stronger scaffold could lift any model; the number reflects model + prompt together.</li>
+<li><b>Simulator parameters are plausible, not fitted</b> to real emergency-department data.</li>
+</ul>
+
+<h2>Bottom line</h2>
+<p>The benchmark works: it separates a model that can run an ED (gpt-5.6, 0.65) from one that cannot (gpt-4o-mini, below zero), and it explains <i>why</i> in terms of what each did on the floor rather than a single opaque score. The next step is multiple seeds and more models to turn these single-shift readings into stable numbers.</p>
+
+<div class="foot">er-gym &middot; github.com/AbhinavMir/hospital-gym &middot; ed-baseline / seed s1 &middot; anchors: null &minus;114,636 / oracle &minus;29,826 (span 84,810)</div>
+</body></html>
